@@ -174,8 +174,6 @@ class CitegraphUI {
       for (const el of win.document.querySelectorAll(".citegraph-show")) el.remove();
     }
   }
-    this._menuWins = null;
-  }
 
   // -- item pane ego -------------------------------------------------------
 

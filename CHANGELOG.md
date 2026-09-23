@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.1.4 — 2026-09-23
+
+- Fix syntax error in 0.1.3 (plugin failed to load). Same single-menu-entry change.
+
+
 ## 0.1.3 — 2026-09-23
 
 - One "Show Citation Graph" per menu (MenuManager only; dropped the DOM duplicate)
