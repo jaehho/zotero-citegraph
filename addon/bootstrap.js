@@ -26,11 +26,12 @@ async function startup({ id, version, rootURI }, reason) {
   Citegraph = new CitegraphUI({ rootURI, id, version, resRoot: "citegraph" });
   await Citegraph.startup(reason);
 
-  // make check only. One-shot: consume the pref immediately so a stale
-  // `true` can never auto-open a graph on install or every launch.
+  // make check only. A sentinel file (not a pref) arms the suite — prefs stick
+  // in prefs.js and caused install to auto-open the Chiappe graph.
   try {
-    if (Zotero.Prefs.get("extensions.zotero-citegraph.selftest", true)) {
-      Zotero.Prefs.set("extensions.zotero-citegraph.selftest", false);
+    const path = "/tmp/citegraph-armed";
+    if (await IOUtils.exists(path)) {
+      await IOUtils.remove(path);
       Services.scriptloader.loadSubScript(rootURI + "selftest.js");
       setTimeout(() => {
         void CitegraphSelfTest.run(Citegraph).catch((e) => log("selftest: " + e));

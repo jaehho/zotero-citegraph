@@ -4,23 +4,22 @@
 set -euo pipefail
 ROOT=/home/jaeho/projects/zotero-citegraph
 REPORT=/tmp/citegraph-live-test.json
+ARM=/tmp/citegraph-armed
 PROFILE=$(echo "$HOME"/.zotero/zotero/*.default*)
-PREF=extensions.zotero-citegraph.selftest
 
-# Zotero must be down to flip the pref and pick up source
+# Zotero must be down to flip the sentinel and pick up source
 if pgrep -x zotero-bin >/dev/null; then
   pgrep -x zotero-bin | xargs -r kill
   for _ in $(seq 1 20); do pgrep -x zotero-bin >/dev/null || break; sleep 0.5; done
 fi
 
 rm -f "$REPORT"
-# turn the suite on (user.js wins over prefs.js until first run rewrites)
-echo "user_pref(\"$PREF\", true);" >>"$PROFILE/user.js"
+# one-shot sentinel — the plugin consumes and deletes it (prefs stick and leak)
+: >"$ARM"
 
 cleanup() {
-  # strip the one-shot pref from BOTH files — Zotero copies user.js → prefs.js
-  # and a leftover true auto-opens the Chiappe graph on every launch.
-  sed -i "/$PREF/d" "$PROFILE/user.js" "$PROFILE/prefs.js" 2>/dev/null || true
+  rm -f "$ARM"
+  sed -i "/zotero-citegraph\.selftest/d" "$PROFILE/user.js" "$PROFILE/prefs.js" 2>/dev/null || true
 }
 trap cleanup EXIT
 

@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.1.2 — 2026-09-23
+
+- Self-test arms only via `/tmp/citegraph-armed` (never a pref). Install and
+  normal launch never open a graph.
+
+
 ## 0.1.1 — 2026-09-23
 
 - Self-test is one-shot and closes its tabs. A leftover `selftest` pref no longer

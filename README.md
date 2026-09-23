@@ -48,5 +48,8 @@ Plugin From File, or `make release`.
 Cache: `<Zotero data dir>/citegraph/openalex.json`.
 
 Updates: GitHub `releases/latest/download/updates.json` via `make release`.
+Zotero polls that URL (same as zotero-tray) and installs the new XPI from
+`update_link`. Keep **Tools → Plugins → ⚙ → Update Add-ons Automatically**
+on. Source installs (`make dev`) do not auto-update.
 
 Gotchas: [ISSUES.md](ISSUES.md).
