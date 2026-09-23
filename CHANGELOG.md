@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.1.3 — 2026-09-23
+
+- One "Show Citation Graph" per menu (MenuManager only; dropped the DOM duplicate)
+
+
 ## 0.1.2 — 2026-09-23
 
 - Self-test arms only via `/tmp/citegraph-armed` (never a pref). Install and

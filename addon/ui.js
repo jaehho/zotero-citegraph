@@ -48,9 +48,9 @@ class CitegraphUI {
   detach() {}
 
   // -- menus ---------------------------------------------------------------
-  // MenuManager first (Zotero 10). A throwing onShowing or a bad icon URL can
-  // empty the whole popup — never let either happen. Collection entry is
-  // always-on (citegeist); item entry is gated via ctx.setVisible when present.
+  // MenuManager only. A DOM backup duplicates the entry ("Show Citation Graph"
+  // twice) once MenuManager actually inserts. Keep one path.
+  // A throwing onShowing or a bad icon URL can empty the whole popup — guard both.
 
   registerMenus() {
     const iconURL = this.rootURI + "content/icons/graph.svg";
@@ -69,102 +69,98 @@ class CitegraphUI {
     };
 
     const mm = Zotero.MenuManager;
-    if (mm?.registerMenu) {
-      this.menuIDs.push(
-        mm.registerMenu({
-          menuID: "citegraph-collection",
-          pluginID: this.id,
-          target: "main/library/collection",
-          menus: [
-            {
-              menuType: "menuitem",
-              l10nID: "citegraph-menu-show",
-              icon: iconURL,
-              onShowing: guard((event) => forceLabel(event?.target)),
-              onCommand: guard(() => void this.openFromCollection({})),
-            },
-          ],
-        }),
-        mm.registerMenu({
-          menuID: "citegraph-item",
-          pluginID: this.id,
-          target: "main/library/item",
-          menus: [
-            {
-              menuType: "menuitem",
-              l10nID: "citegraph-menu-show",
-              icon: iconURL,
-              onShowing: guard((event, ctx) => {
-                forceLabel(event?.target);
-                const items = (ctx?.items || []).filter((i) => i?.isRegularItem?.() && !i.deleted);
-                const show = items.length > 0;
-                if (typeof ctx?.setVisible === "function") ctx.setVisible(show);
-                else if (event?.target) event.target.hidden = !show;
-              }),
-              onCommand: guard((event, ctx) => {
-                void this.openFromContext({ items: ctx?.items });
-              }),
-            },
-          ],
-        }),
-      );
+    if (!mm?.registerMenu) {
+      log("MenuManager missing — DOM fallback");
+      for (const win of Zotero.getMainWindows()) this.injectMenusDOM(win);
+      return;
     }
-
-    // Belt: MenuManager sometimes registers but never inserts into the popup
-    // (or the popup rebuilds). Re-assert the item on every popupshowing.
-    for (const win of Zotero.getMainWindows()) this.wireMenusDOM(win);
+    this.menuIDs.push(
+      mm.registerMenu({
+        menuID: "citegraph-collection",
+        pluginID: this.id,
+        target: "main/library/collection",
+        menus: [
+          {
+            menuType: "menuitem",
+            l10nID: "citegraph-menu-show",
+            icon: iconURL,
+            onShowing: guard((event) => forceLabel(event?.target)),
+            onCommand: guard(() => void this.openFromCollection({})),
+          },
+        ],
+      }),
+      mm.registerMenu({
+        menuID: "citegraph-item",
+        pluginID: this.id,
+        target: "main/library/item",
+        menus: [
+          {
+            menuType: "menuitem",
+            l10nID: "citegraph-menu-show",
+            icon: iconURL,
+            onShowing: guard((event, ctx) => {
+              forceLabel(event?.target);
+              const items = (ctx?.items || []).filter((i) => i?.isRegularItem?.() && !i.deleted);
+              const show = items.length > 0;
+              if (typeof ctx?.setVisible === "function") ctx.setVisible(show);
+              else if (event?.target) event.target.hidden = !show;
+            }),
+            onCommand: guard((event, ctx) => {
+              void this.openFromContext({ items: ctx?.items });
+            }),
+          },
+        ],
+      }),
+    );
   }
 
-  wireMenusDOM(win) {
-    if (this._menuWins?.has(win)) return;
-    this._menuWins = this._menuWins || new WeakSet();
-    this._menuWins.add(win);
-    const ensure = (popupId, handler) => {
+  injectMenusDOM(win) {
+    const add = (popupId, handler) => {
       const popup = win.document.getElementById(popupId);
-      if (!popup) return;
-      const sync = () => {
+      if (!popup || popup.querySelector(".citegraph-show")) return;
+      const item = win.document.createXULElement("menuitem");
+      item.className = "citegraph-show";
+      item.setAttribute("label", "Show Citation Graph");
+      item.addEventListener("command", () => {
         try {
-          if (!this.findOurMenuitem(popup)) {
-            const item = win.document.createXULElement("menuitem");
-            item.className = "citegraph-show";
-            item.setAttribute("label", "Show Citation Graph");
-            item.addEventListener("command", () => {
-              try {
-                handler();
-              } catch (e) {
-                Zotero.logError(e);
-              }
-            });
-            // plugins go in a footer block — put ours at the end
-            popup.appendChild(item);
-          } else {
-            const el = this.findOurMenuitem(popup);
-            if (el && !el.getAttribute("label")) el.setAttribute("label", "Show Citation Graph");
-            el.hidden = false;
-          }
+          handler();
         } catch (e) {
-          log("menu ensure: " + e);
+          Zotero.logError(e);
         }
-      };
-      popup.addEventListener("popupshowing", sync);
-      sync();
+      });
+      popup.appendChild(item);
     };
-    ensure("zotero-collectionmenu", () => this.openFromCollection({}));
-    ensure("zotero-itemmenu", () =>
+    add("zotero-collectionmenu", () => this.openFromCollection({}));
+    add("zotero-itemmenu", () =>
       this.openFromContext({ items: win.ZoteroPane?.getSelectedItems?.() }),
     );
   }
 
   findOurMenuitem(popup) {
     if (!popup) return null;
-    return (
-      popup.querySelector(".citegraph-show") ||
-      [...popup.querySelectorAll("menuitem")].find((el) => {
-        const l = (el.getAttribute("label") || "").toLowerCase();
-        const id = el.getAttribute("data-l10n-id") || el.getAttribute("l10n-id") || "";
-        return l.includes("citation graph") || id.includes("citegraph");
-      }) || null
-    );
+    const all = [...popup.querySelectorAll("menuitem")];
+    const hits = all.filter((el) => {
+      const l = (el.getAttribute("label") || "").toLowerCase();
+      const id = (
+        el.getAttribute("data-l10n-id") ||
+        el.getAttribute("l10n-id") ||
+        el.className ||
+        ""
+      ).toLowerCase();
+      return (
+        id.includes("citegraph") ||
+        id.includes("citation-graph") ||
+        l.includes("citation graph") ||
+        /citegraph/.test(id)
+      );
+    });
+    // collapse duplicates (MenuManager + a stale DOM node)
+    for (let i = 1; i < hits.length; i++) {
+      try {
+        hits[i].remove();
+      } catch (e) {}
+    }
+    return hits[0] || null;
   }
 
   unregisterMenus() {
@@ -177,6 +173,7 @@ class CitegraphUI {
     for (const win of Zotero.getMainWindows()) {
       for (const el of win.document.querySelectorAll(".citegraph-show")) el.remove();
     }
+  }
     this._menuWins = null;
   }
 
