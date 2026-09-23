@@ -1,0 +1,42 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="color-scheme" content="light dark" />
+    <title>Citation Graph</title>
+    <link rel="stylesheet" href="graph.css" />
+  </head>
+  <body>
+    <header id="top">
+      <input id="search" type="search" placeholder="Search…" />
+      <button id="rebuild" title="Rebuild from library">Rebuild</button>
+      <button id="fetch-oa" title="Fetch citation edges from OpenAlex">Fetch OpenAlex</button>
+      <label
+        >Size
+        <select id="size-by">
+          <option value="fixed">fixed</option>
+          <option value="cited-here" selected>cited-here</option>
+          <option value="year">year</option>
+        </select>
+      </label>
+      <label
+        >Color
+        <select id="color-by">
+          <option value="year" selected>year</option>
+          <option value="author">author</option>
+          <option value="collection">collection</option>
+        </select>
+      </label>
+      <label class="check"><input id="ghosts" type="checkbox" /> ghosts</label>
+      <span id="status"></span>
+    </header>
+    <main id="stage">
+      <div id="graph"></div>
+      <div id="legend" hidden></div>
+    </main>
+    <footer id="foot"></footer>
+    <div id="tip" hidden></div>
+    <script src="lib/force-graph.min.js"></script>
+    <script src="graph.js"></script>
+  </body>
+</html>
