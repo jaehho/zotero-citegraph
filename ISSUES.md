@@ -25,3 +25,6 @@ Edge drawing:
 OpenAlex:
 - Filter is `doi:a|b|c` (field once). `doi:a|doi:b` → HTTP 400. Held-item DOIs only.
 - `IOUtils.exists` / `makeDirectory` are async — do not use `exists()` as a boolean.
+
+Self-test:
+- `make check` sets `extensions.zotero-citegraph.selftest=true`. Zotero copies it into `prefs.js`. If that survives, every launch auto-opens the Chiappe graph. Gate is one-shot (pref cleared on read) and cleanup strips **both** `user.js` and `prefs.js`. Self-test also closes its tabs so session restore cannot resurrect them.

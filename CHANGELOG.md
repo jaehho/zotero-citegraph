@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.1.1 — 2026-09-23
+
+- Self-test is one-shot and closes its tabs. A leftover `selftest` pref no longer
+  auto-opens the Connectome (Chiappe) graph on install or every launch.
+
+
 ## 0.1.0 — 2026-09-23
 
 First release. Zotero 10 citation graph.

@@ -124,7 +124,6 @@ var CitegraphSelfTest = (function () {
 
       // -- graph tab + bridge + content --------------------------------------
       const win = Zotero.getMainWindows()[0];
-      const before = (win.Zotero_Tabs._tabs || []).length;
       await ui.openGraph({
         kind: "collection",
         collection,
@@ -209,11 +208,21 @@ var CitegraphSelfTest = (function () {
         await sleep(300);
         ok("rebuild action", true);
       }
-
-      ok("tab count grew or same", true, `before ${before}`);
     } catch (e) {
       ok("suite crashed", false, e && e.stack ? e.stack : e);
     }
+
+    // Close every citegraph tab we opened — otherwise session restore brings
+    // Chiappe back on the next launch (looks like install auto-opened it).
+    try {
+      const win = Zotero.getMainWindows()[0];
+      for (const tabID of [...ui.browsers.keys()]) {
+        try {
+          win.Zotero_Tabs.close(tabID);
+        } catch (e) {}
+        ui.browsers.delete(tabID);
+      }
+    } catch (e) {}
 
     const pass = checks.every((c) => c.pass);
     const report = {

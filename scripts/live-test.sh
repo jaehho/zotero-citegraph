@@ -18,9 +18,9 @@ rm -f "$REPORT"
 echo "user_pref(\"$PREF\", true);" >>"$PROFILE/user.js"
 
 cleanup() {
-  # strip our one-shot pref line
-  sed -i "/$PREF/d" "$PROFILE/user.js" 2>/dev/null || true
-  # leave Zotero running if it is — the user drives it
+  # strip the one-shot pref from BOTH files — Zotero copies user.js → prefs.js
+  # and a leftover true auto-opens the Chiappe graph on every launch.
+  sed -i "/$PREF/d" "$PROFILE/user.js" "$PROFILE/prefs.js" 2>/dev/null || true
 }
 trap cleanup EXIT
 

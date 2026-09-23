@@ -22,17 +22,22 @@ async function startup({ id, version, rootURI }, reason) {
   Services.scriptloader.loadSubScript(rootURI + "edges.js");
   Services.scriptloader.loadSubScript(rootURI + "openalex.js");
   Services.scriptloader.loadSubScript(rootURI + "ui.js");
-  Services.scriptloader.loadSubScript(rootURI + "selftest.js");
 
   Citegraph = new CitegraphUI({ rootURI, id, version, resRoot: "citegraph" });
   await Citegraph.startup(reason);
 
-  // Live suite (make check): pref extensions.zotero-citegraph.selftest
-  if (CitegraphSelfTest.wanted()) {
-    // give main window a beat to attach menus
-    setTimeout(() => {
-      void CitegraphSelfTest.run(Citegraph).catch((e) => log("selftest: " + e));
-    }, 1500);
+  // make check only. One-shot: consume the pref immediately so a stale
+  // `true` can never auto-open a graph on install or every launch.
+  try {
+    if (Zotero.Prefs.get("extensions.zotero-citegraph.selftest", true)) {
+      Zotero.Prefs.set("extensions.zotero-citegraph.selftest", false);
+      Services.scriptloader.loadSubScript(rootURI + "selftest.js");
+      setTimeout(() => {
+        void CitegraphSelfTest.run(Citegraph).catch((e) => log("selftest: " + e));
+      }, 1500);
+    }
+  } catch (e) {
+    log("selftest gate: " + e);
   }
 }
 
