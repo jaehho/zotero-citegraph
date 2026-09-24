@@ -1,11 +1,10 @@
 # zotero-citegraph
 
-Zotero 10+ citation graph plugin.
+Zotero 10+ citation graph plugin. Umbrella rules: [../CLAUDE.md](../CLAUDE.md).
 
 - README.md — install and use
-- ISSUES.md — API and toolkit gotchas
+- ISSUES.md — force-graph / edge / OpenAlex gotchas (shared Zotero traps in ../ISSUES.md)
 - CHANGELOG.md — release notes
-- DESIGN notes live in code comments, not a separate doc
 
 ## Testing
 

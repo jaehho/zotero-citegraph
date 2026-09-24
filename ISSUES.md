@@ -1,17 +1,6 @@
-# Gotchas
+# Gotchas (zotero-citegraph)
 
-Install (Zotero 10):
-- Tools → Plugins → Install Plugin From File. Dropping an XPI into `extensions/` does not register it (`startupScanScopes=0`).
-- Official source install: proxy file `extensions/<id>` = path to `addon/`, **and** delete `extensions.lastAppBuildId` / `lastAppVersion` from `prefs.js` once so Zotero rescans. Then `zotero -purgecaches` after edits.
-- Overwriting the live profile XPI while Zotero runs corrupts the jar cache.
-
-APIs:
-- `ZoteroPane.getSelectedCollection()` is gone; use `getSelectedCollections()[0]`.
-- `Collection.prototype.parent` is deprecated (logs a warning, returns `parentID`). Use `parentID` / `parentKey`.
-- `ItemPaneManager.registerSection` needs `header.icon` **and** `header.darkIcon` (not defaulted).
-- `Zotero_Tabs.add()` returns `{id, container}`; register `tabHooks.restoreState.<type>` or session restore aborts.
-- chrome→content: `wrappedJSObject.citegraphSetData(...)`. CustomEvent chrome→content does not cross.
-- MenuManager can register without inserting. Insertion happens in `ZoteroPane.buildCollectionContextMenu` (called before `openPopup`), not on the menupopup's `popupshowing`. That builder returns early when `getCollectionTreeRows()` is empty — select a collection first. A throwing `onShowing` or a dead icon URL can empty the whole popup.
+Shared Zotero 10 install/API traps: [../ISSUES.md](../ISSUES.md).
 
 force-graph 1.49.5:
 - No `.linkDistance()` (use `d3Force('link').distance`), no `.refresh()`, and `.forceUpdate` is Preact’s — not on the graph.
@@ -27,5 +16,7 @@ OpenAlex:
 - Filter is `doi:a|b|c` (field once). `doi:a|doi:b` → HTTP 400. Held-item DOIs only.
 - `IOUtils.exists` / `makeDirectory` are async — do not use `exists()` as a boolean.
 
-Self-test:
-- `make check` sets `extensions.zotero-citegraph.selftest=true`. Zotero copies it into `prefs.js`. If that survives, every launch auto-opens the Chiappe graph. Gate is one-shot (pref cleared on read) and cleanup strips **both** `user.js` and `prefs.js`. Self-test also closes its tabs so session restore cannot resurrect them.
+Self-test / live suite:
+- Armed by the one-shot file `/tmp/citegraph-armed` (never a pref — prefs stick in `prefs.js` and auto-opened the Chiappe graph). The suite deletes the sentinel; cleanup also strips any leftover selftest pref from `user.js`/`prefs.js`.
+- `make check` uses `~/.local/share/citegraph-test` (isolated profile+data). Refresh with `scripts/test-zotero-setup.sh` after library changes.
+- Content selftest (`window.citegraphSelfTest`) snapshots canvases via `toDataURL` — works on a hidden workspace; grim cannot.
