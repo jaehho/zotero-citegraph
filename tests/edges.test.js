@@ -128,6 +128,42 @@ test("resolveConflicts: higher confidence wins outright", () => {
   assert.ok(!out[0].mutual);
 });
 
+test("primaryCollection prefers the deepest path", () => {
+  assert.equal(E.primaryCollection(["Papers", "Papers/Methods", "Other"]), "Papers/Methods");
+  assert.equal(E.primaryCollection(["A", "B"]), "A"); // same depth: lexical
+  assert.equal(E.primaryCollection([]), "");
+  assert.equal(E.primaryCollection(null), "");
+});
+
+test("primaryCollection prefers memberships under scopePath", () => {
+  // Under-scope wins even when an outside path is deeper.
+  assert.equal(
+    E.primaryCollection(["Other/Deep/Nested", "Papers/Methods"], "Papers"),
+    "Papers/Methods",
+  );
+  // Scope itself is a valid membership.
+  assert.equal(E.primaryCollection(["Papers", "Papers/Methods"], "Papers/Methods"), "Papers/Methods");
+  // Nothing under scope → deepest overall.
+  assert.equal(E.primaryCollection(["X/Y/Z", "Papers"], "Missing"), "X/Y/Z");
+});
+
+test("assignHues: two keys are opposite, unknown is grey", () => {
+  const m = E.assignHues(["Green", "Yellow", "?", ""]);
+  assert.equal(m.get("?"), "#666");
+  const hue = (c) => Number(c.match(/hsl\((\d+)/)[1]);
+  const d = Math.abs(hue(m.get("Green")) - hue(m.get("Yellow")));
+  const sep = Math.min(d, 360 - d);
+  assert.ok(sep >= 100, `two keys should be far apart, separation=${sep}`);
+});
+
+test("assignHues: distinct hues for each key, all covered", () => {
+  const m = E.assignHues(["A", "B", "C", "D", "A"]);
+  const painted = [...m.keys()].filter((k) => k !== "?");
+  assert.deepEqual(painted.sort(), ["A", "B", "C", "D"]);
+  const colors = painted.map((k) => m.get(k));
+  assert.equal(new Set(colors).size, 4);
+});
+
 // Chiappe-shaped: 2024 Nature package mutuals stay one edge each; no older→newer.
 test("chiappe shape: 6 mutual pairs collapse, 2024↛2026 dropped", () => {
   const years = {

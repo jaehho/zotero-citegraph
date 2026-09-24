@@ -1,7 +1,7 @@
 {
   "manifest_version": 2,
   "name": "Citation Graph",
-  "version": "0.1.4",
+  "version": "0.1.5",
   "description": "Citation relationships in a clean force graph",
   "author": "Jaeho Cho",
   "homepage_url": "https://github.com/jaehho/zotero-citegraph",

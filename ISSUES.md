@@ -7,10 +7,11 @@ Install (Zotero 10):
 
 APIs:
 - `ZoteroPane.getSelectedCollection()` is gone; use `getSelectedCollections()[0]`.
+- `Collection.prototype.parent` is deprecated (logs a warning, returns `parentID`). Use `parentID` / `parentKey`.
 - `ItemPaneManager.registerSection` needs `header.icon` **and** `header.darkIcon` (not defaulted).
 - `Zotero_Tabs.add()` returns `{id, container}`; register `tabHooks.restoreState.<type>` or session restore aborts.
 - chrome→content: `wrappedJSObject.citegraphSetData(...)`. CustomEvent chrome→content does not cross.
-- MenuManager can register without inserting. Re-assert the item on `popupshowing`. A throwing `onShowing` or a dead icon URL can empty the whole popup.
+- MenuManager can register without inserting. Insertion happens in `ZoteroPane.buildCollectionContextMenu` (called before `openPopup`), not on the menupopup's `popupshowing`. That builder returns early when `getCollectionTreeRows()` is empty — select a collection first. A throwing `onShowing` or a dead icon URL can empty the whole popup.
 
 force-graph 1.49.5:
 - No `.linkDistance()` (use `d3Force('link').distance`), no `.refresh()`, and `.forceUpdate` is Preact’s — not on the graph.

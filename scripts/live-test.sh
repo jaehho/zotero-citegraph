@@ -1,17 +1,28 @@
 #!/usr/bin/env bash
 # Run the in-Zotero feature suite against the real library (read-only + OpenAlex).
-# Writes /tmp/citegraph-live-test.json and prints a summary. Exit 1 on any fail.
+# Builds the current tree's XPI, installs it over the profile copy, then arms the
+# one-shot suite. Writes /tmp/citegraph-live-test.json. Exit 1 on any fail.
 set -euo pipefail
 ROOT=/home/jaeho/projects/zotero-citegraph
 REPORT=/tmp/citegraph-live-test.json
 ARM=/tmp/citegraph-armed
 PROFILE=$(echo "$HOME"/.zotero/zotero/*.default*)
+ID=$(jq -r .applications.zotero.id "$ROOT/addon/manifest.json")
 
-# Zotero must be down to flip the sentinel and pick up source
+# Zotero must be down to replace the XPI and flip the sentinel
 if pgrep -x zotero-bin >/dev/null; then
   pgrep -x zotero-bin | xargs -r kill
   for _ in $(seq 1 20); do pgrep -x zotero-bin >/dev/null || break; sleep 0.5; done
 fi
+
+# Test what we ship: rebuild and install the working-tree XPI. Overwriting the
+# registered filename keeps the existing plugin-manager entry valid.
+echo "building and installing current tree XPI…"
+make -C "$ROOT" xpi >/dev/null
+XPI=$(ls -t "$ROOT"/build/zotero-citegraph-*.xpi | head -1)
+rm -f "$PROFILE/extensions/$ID" "$PROFILE/extensions/$ID.xpi"
+cp "$XPI" "$PROFILE/extensions/$ID.xpi"
+sed -i '/extensions\.lastAppBuildId\|extensions\.lastAppVersion/d' "$PROFILE/prefs.js"
 
 rm -f "$REPORT"
 # one-shot sentinel — the plugin consumes and deletes it (prefs stick and leak)

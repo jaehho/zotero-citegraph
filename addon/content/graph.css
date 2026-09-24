@@ -111,9 +111,15 @@ body {
 }
 #legend .swatches {
   display: flex;
-  gap: 4px;
+  flex-direction: column;
+  gap: 2px;
   margin: 3px 0;
+}
+#legend .row {
+  display: flex;
+  gap: 4px;
   align-items: center;
+  min-width: 0;
 }
 #legend .dot {
   width: 8px;
@@ -133,7 +139,7 @@ body {
   width: 120px;
 }
 #legend .name {
-  max-width: 90px;
+  max-width: 160px;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;

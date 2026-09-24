@@ -71,19 +71,19 @@ function yearColor(year, years) {
   return `hsl(${h} 55% 55%)`;
 }
 
-function authorColor(node) {
-  const a = (node.creators && node.creators[0]) || "?";
-  let h = 0;
-  for (let i = 0; i < a.length; i++) h = (h * 31 + a.charCodeAt(i)) | 0;
-  return `hsl(${Math.abs(h) % 360} 45% 55%)`;
+function authorKey(n) {
+  return (n.creators && n.creators[0]) || "?";
 }
 
-function collectionColor(node) {
-  const c = (node.collections && node.collections[0]) || "?";
-  let h = 0;
-  for (let i = 0; i < c.length; i++) h = (h * 31 + c.charCodeAt(i)) | 0;
-  return `hsl(${Math.abs(h) % 360} 40% 55%)`;
+function collectionKey(n) {
+  return n.collection || (n.collections && n.collections[0]) || "?";
 }
+
+// Evenly spaced hues over the full node set (not the ghost-filtered view), so
+// two collections never land on adjacent greens/yellows and toggling ghosts
+// does not reshuffle. See CitegraphEdges.assignHues.
+let hueByAuthor = new Map([["?", "#666"]]);
+let hueByCollection = new Map([["?", "#666"]]);
 
 function labelOf(n) {
   const a = (n.creators && n.creators[0]) || (n.ghost ? "…" : "?");
@@ -116,6 +116,8 @@ function renderInner() {
     return;
   }
   const { nodes, edges } = visibleData();
+  hueByAuthor = CitegraphEdges.assignHues(graph.nodes.map(authorKey));
+  hueByCollection = CitegraphEdges.assignHues(graph.nodes.map(collectionKey));
   const years = nodes.map((n) => n.year).filter(Boolean);
   const ystat = years.length
     ? { min: Math.min(...years), max: Math.max(...years) }
@@ -130,8 +132,8 @@ function renderInner() {
   };
   const colorOf = (n) => {
     if (n.ghost) return "#555";
-    if (prefs.colorBy === "author") return authorColor(n);
-    if (prefs.colorBy === "collection") return collectionColor(n);
+    if (prefs.colorBy === "author") return hueByAuthor.get(authorKey(n)) || "#666";
+    if (prefs.colorBy === "collection") return hueByCollection.get(collectionKey(n)) || "#666";
     return yearColor(n.year, ystat);
   };
 
@@ -284,12 +286,10 @@ function updateLegend(nodes, ystat) {
   if (!held.length) return;
 
   if (prefs.colorBy === "author" || prefs.colorBy === "collection") {
-    const keyOf =
-      prefs.colorBy === "author"
-        ? (n) => (n.creators && n.creators[0]) || "?"
-        : (n) => (n.collections && n.collections[0]) || "?";
-    const colorOfKey = prefs.colorBy === "author" ? authorColor : (n) => collectionColor(n);
-    el.appendChild(document.createTextNode(prefs.colorBy === "author" ? "author" : "collection"));
+    const isAuthor = prefs.colorBy === "author";
+    const keyOf = isAuthor ? authorKey : collectionKey;
+    const hueMap = isAuthor ? hueByAuthor : hueByCollection;
+    el.appendChild(document.createTextNode(isAuthor ? "author" : "collection"));
     const sw = document.createElement("div");
     sw.className = "swatches";
     const seen = new Set();
@@ -297,16 +297,20 @@ function updateLegend(nodes, ystat) {
       const k = keyOf(n);
       if (seen.has(k)) continue;
       seen.add(k);
+      const row = document.createElement("div");
+      row.className = "row";
       const item = document.createElement("span");
       item.className = "dot";
       item.title = k;
-      item.style.background = colorOfKey(n);
-      sw.appendChild(item);
+      item.style.background = hueMap.get(k) || "#666";
+      row.appendChild(item);
       const name = document.createElement("span");
       name.className = "name";
       name.textContent = k;
-      sw.appendChild(name);
-      if (seen.size >= 4) break;
+      name.title = k;
+      row.appendChild(name);
+      sw.appendChild(row);
+      if (seen.size >= 6) break;
     }
     el.appendChild(sw);
   } else {
@@ -595,6 +599,7 @@ function showNodeTip(n) {
   badges.className = "meta";
   badges.textContent = [
     n.ghost ? "not in library" : "in library",
+    n.collection || null,
     n.hasPdf ? "PDF" : null,
     `cited here ×${n.citedHere || 0}`,
   ]
@@ -814,6 +819,12 @@ window.citegraphSelfTest = function () {
     );
     out.legend = !$("legend").hidden && $("legend").children.length > 0;
     out.legendDetail = $("legend").textContent.trim().slice(0, 40);
+    out.colorsLib =
+      typeof CitegraphEdges === "object" &&
+      typeof CitegraphEdges.assignHues === "function" &&
+      typeof CitegraphEdges.primaryCollection === "function";
+    out.collectionColorKeys = [...new Set(graph.nodes.filter((n) => !n.ghost).map(collectionKey))];
+    out.hueSample = CitegraphEdges.assignHues(["A", "B"]);
 
     render();
     out.renderOk = !String(status.textContent).startsWith("render failed");

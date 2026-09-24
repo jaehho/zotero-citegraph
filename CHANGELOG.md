@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.1.5 — 2026-09-24
+
+- Color-by collection/author: evenly spaced hues over the keys in the graph
+  (two collections land on opposite hues, not adjacent greens/yellows).
+- Collection identity is the full `Parent/Sub` path, so same-named
+  subcollections under different parents no longer share a color.
+- Multi-membership: color by the deepest path under the opened collection
+  when one exists, else the deepest path overall (was `collections[0]` in
+  Zotero's arbitrary order).
+- Legend stacks name paths; node tooltip shows the primary collection.
+- Live suite: build+install the working-tree XPI before running (was testing a
+  stale profile XPI); collection-menu check calls `buildCollectionContextMenu`.
+
+
 ## 0.1.4 — 2026-09-23
 
 - Fix syntax error in 0.1.3 (plugin failed to load). Same single-menu-entry change.

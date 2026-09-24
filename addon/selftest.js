@@ -18,35 +18,50 @@ var CitegraphSelfTest = (function () {
       ok("MenuManager present", !!Zotero.MenuManager?.registerMenu);
       ok("menus registered", ui.menuIDs.filter(Boolean).length >= 2, ui.menuIDs.join(","));
 
-      // The collection popup must actually contain our entry (or DOM fallback).
+      const pane = Zotero.getActiveZoteroPane() || Zotero.getMainWindows()[0]?.ZoteroPane;
+      ok("ZoteroPane", !!pane);
+
+      // -- find Chiappe and select it (menu insert needs a selected row) ------
+      const collection = findByKey("28EET5UR") || findByName(/chiappe/i);
+      ok("Chiappe collection", !!collection, collection?.name);
+      if (!collection) throw new Error("no Chiappe collection");
+      try {
+        await pane?.collectionsView?.selectCollection?.(collection.id);
+      } catch (e) {}
+
+      // The collection popup must actually contain our entry.
+      // MenuManager inserts via ZoteroPane.buildCollectionContextMenu (called
+      // before openPopup), NOT via a popupshowing listener on the menupopup.
+      // That builder no-ops when getCollectionTreeRows() is empty — select first.
       const win0 = Zotero.getMainWindows()[0];
       const pop = win0?.document?.getElementById("zotero-collectionmenu");
       ok("collection popup exists", !!pop);
       if (pop) {
+        let built = true;
+        try {
+          await pane?.buildCollectionContextMenu?.();
+        } catch (e) {
+          built = false;
+        }
+        ok("buildCollectionContextMenu ran", built, built ? "" : "threw");
         try {
           pop.dispatchEvent(new win0.Event("popupshowing", { bubbles: true }));
         } catch (e) {}
-        await sleep(50);
+        await sleep(100);
         const ours = ui.findOurMenuitem(pop);
         const all = [...pop.querySelectorAll("menuitem")].map(
-          (el) => el.getAttribute("label") || el.getAttribute("data-l10n-id") || "?",
+          (el) => el.getAttribute("label") || el.getAttribute("data-l10n-id") || el.className || "?",
         );
-        ok("collection menu has our item", !!ours, all.join(" | ").slice(0, 200));
+        const custom = [...pop.querySelectorAll(".zotero-custom-menu-item")].map(
+          (el) => el.className + ":" + (el.getAttribute("label") || el.dataset.l10nId || "?"),
+        );
+        ok("collection menu has our item", !!ours, (all.join(" | ") + " || custom: " + custom.join(",")).slice(0, 300));
         ok(
           "our item is visible",
           !!ours && !ours.hidden,
           ours ? `hidden=${ours.hidden} label=${ours.getAttribute("label")}` : "missing",
         );
       }
-
-      const pane = Zotero.getActiveZoteroPane() || Zotero.getMainWindows()[0]?.ZoteroPane;
-      ok("ZoteroPane", !!pane);
-
-      // -- find Chiappe ------------------------------------------------------
-      const collection = findByKey("28EET5UR") || findByName(/chiappe/i);
-      ok("Chiappe collection", !!collection, collection?.name);
-      if (!collection) throw new Error("no Chiappe collection");
-
       // -- buildGraph --------------------------------------------------------
       const graph = await ui.buildGraph({ kind: "collection", collection });
       const held = graph.nodes.filter((n) => !n.ghost);
@@ -69,6 +84,44 @@ var CitegraphSelfTest = (function () {
       );
       const mutuals = graph.edges.filter((e) => e.mutual);
       ok("mutual edges collapsed", mutuals.every((e) => e.mutual), `mutual count ${mutuals.length}`);
+
+      // -- collection color identity + palette --------------------------------
+      ok(
+        "primary collection stamped",
+        held.every((n) => typeof n.collection === "string"),
+        held
+          .slice(0, 3)
+          .map((n) => n.collection || "(none)")
+          .join(" | "),
+      );
+      const colKeys = [...new Set(held.map((n) => n.collection || "?"))];
+      const hueMap = CitegraphEdges.assignHues(colKeys);
+      ok("assignHues in chrome", hueMap instanceof Map && hueMap.size >= 1, `keys ${colKeys.length}`);
+      if (colKeys.filter((k) => k !== "?").length >= 2) {
+        const hueOf = (c) => Number(String(c).match(/hsl\((\d+)/)?.[1] ?? -1);
+        const painted = colKeys.filter((k) => k !== "?");
+        let minSep = 360;
+        for (let i = 0; i < painted.length; i++) {
+          for (let j = i + 1; j < painted.length; j++) {
+            const d = Math.abs(hueOf(hueMap.get(painted[i])) - hueOf(hueMap.get(painted[j])));
+            minSep = Math.min(minSep, Math.min(d, 360 - d));
+          }
+        }
+        ok(
+          "collection hues maximally spaced",
+          minSep >= 360 / painted.length - 1,
+          `min sep ${minSep}° over ${painted.length} keys`,
+        );
+      }
+      // Deepest under-scope path wins when an item is in several collections
+      const multi = held.find((n) => (n.collections || []).length > 1);
+      if (multi && multi.collection) {
+        ok(
+          "multi-membership picks a member path",
+          multi.collections.includes(multi.collection),
+          `${multi.collection} from ${multi.collections.join(" , ")}`,
+        );
+      }
 
       // -- item-pane ego -----------------------------------------------------
       const item = Zotero.Items.get(held[0]?.itemID) || collection.getChildItems()[0];
@@ -157,10 +210,16 @@ var CitegraphSelfTest = (function () {
         ok("content ForceGraph", ct.forceGraph === true, JSON.stringify(ct).slice(0, 200));
         ok("content data loaded", ct.nodeCount >= 11, `nodes ${ct.nodeCount} edges ${ct.edgeCount}`);
         ok("content footer stamp", /v\S+\s·\s(dev|xpi)/.test(ct.footer || ""), ct.footer);
+        ok(
+          "footer version matches plugin",
+          (ct.footer || "").includes("v" + ui.version),
+          `want v${ui.version} · ${ct.footer}`,
+        );
         ok("content ghosts filter", ct.ghostsFilter === true, JSON.stringify(ct.ghostsDetail));
         ok("content tooltips", ct.tooltips === true, ct.tooltipDetail);
         ok("content render", ct.renderOk !== false, ct.renderStatus);
         ok("content controls", ct.controls === true, ct.controlDetail);
+        ok("content colors lib", ct.colorsLib === true, JSON.stringify(ct.hueSample));
         ok("content edge shaft paints", ct.edgePaintOk === true, JSON.stringify(ct.edgePaint));
         // dump canvases for visual check (probe = known 400×400 with one red edge)
         const dumps = [

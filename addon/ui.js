@@ -536,6 +536,8 @@ class CitegraphUI {
     const self = this;
     const itemByKey = new Map();
     const attsByItem = new Map();
+    const scopePath =
+      scope.kind === "collection" && scope.collection ? collectionPath(scope.collection) : "";
 
     return {
       async listItems() {
@@ -561,6 +563,14 @@ class CitegraphUI {
           if (!item.isRegularItem() || item.deleted) continue;
           const title = field(item, "title", { baseMapped: true });
           if (!title) continue;
+          // Full "Parent/Sub" paths so two "Methods" under different parents
+          // stay distinct; primaryCollection picks the color key.
+          const paths = (item.getCollections() || [])
+            .map((id) => {
+              const c = Zotero.Collections.get(id);
+              return c ? collectionPath(c) : null;
+            })
+            .filter(Boolean);
           const rec = {
             key: item.key,
             itemID: item.id,
@@ -571,9 +581,8 @@ class CitegraphUI {
             year: firstYear(field(item, "date", { unformatted: true })),
             creators: (item.getCreators() || []).map((c) => c.lastName || c.name || ""),
             venue: field(item, "publicationTitle") || field(item, "bookTitle") || "",
-            collections: (item.getCollections() || [])
-              .map((id) => Zotero.Collections.get(id)?.name)
-              .filter(Boolean),
+            collections: paths,
+            collection: CitegraphEdges.primaryCollection(paths, scopePath),
             hasPdf: item
               .getAttachments()
               .some((id) => Zotero.Items.get(id)?.attachmentContentType === "application/pdf"),
@@ -664,6 +673,18 @@ function field(item, name, opts) {
 function firstYear(s) {
   const m = String(s || "").match(/\b(1[89]\d\d|20\d\d)\b/);
   return m ? Number(m[1]) : null;
+}
+
+/** "Parent/Sub/Leaf" via parent IDs. Names, not keys — legend-readable. */
+function collectionPath(col) {
+  const names = [];
+  let c = col;
+  for (let i = 0; c && i < 30; i++) {
+    names.unshift(String(c.name || "?"));
+    // .parent is deprecated (warns and returns parentID). Use parentID.
+    c = c.parentID ? Zotero.Collections.get(c.parentID) : null;
+  }
+  return names.join("/");
 }
 
 function shortAuthor(n) {

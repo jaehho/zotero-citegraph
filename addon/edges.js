@@ -383,6 +383,7 @@ var CitegraphEdges = (function () {
             creators: it.creators || [],
             venue: it.venue || "",
             collections: it.collections || [],
+            collection: it.collection || primaryCollection(it.collections || []),
             hasPdf: !!it.hasPdf,
             ghost: false,
             citedHere: 0,
@@ -396,6 +397,7 @@ var CitegraphEdges = (function () {
             creators: [],
             venue: "",
             collections: [],
+            collection: "",
             hasPdf: false,
             ghost: true,
             citedHere: 0,
@@ -425,6 +427,49 @@ var CitegraphEdges = (function () {
     };
   }
 
+  /**
+   * One collection path for coloring. Prefer memberships under scopePath (when
+   * given), then the deepest path (most specific subcollection), then lexical
+   * order. Empty list → "".
+   */
+  function primaryCollection(paths, scopePath) {
+    const list = (paths || []).map((p) => String(p || "")).filter(Boolean);
+    if (!list.length) return "";
+    const under = (p) =>
+      !scopePath || p === scopePath || p.startsWith(scopePath + "/");
+    return list.slice().sort((a, b) => {
+      const sa = under(a) ? 0 : 1;
+      const sb = under(b) ? 0 : 1;
+      if (sa !== sb) return sa - sb;
+      const da = a.split("/").length;
+      const db = b.split("/").length;
+      if (da !== db) return db - da;
+      return a < b ? -1 : a > b ? 1 : 0;
+    })[0];
+  }
+
+  /**
+   * Distinct hues for a set of category keys (author name, collection path).
+   * Evenly spaced on the wheel so N keys are maximally apart — two keys land on
+   * opposite hues, never adjacent green/yellow. "?" (and empty) share a muted
+   * gray and do not take a hue slot. Build the map from every node, not just
+   * the visible ones, so toggling ghosts does not reshuffle colors.
+   */
+  function assignHues(keys) {
+    const seen = new Set();
+    for (const k of keys || []) {
+      seen.add(k == null || k === "" ? "?" : String(k));
+    }
+    const painted = [...seen].filter((k) => k !== "?").sort();
+    const n = painted.length;
+    const map = new Map([["?", "#666"]]);
+    painted.forEach((k, i) => {
+      const h = n ? Math.round((i * 360) / n) % 360 : 0;
+      map.set(k, `hsl(${h} 55% 50%)`);
+    });
+    return map;
+  }
+
   return {
     DOI_RE,
     normDoi,
@@ -438,6 +483,8 @@ var CitegraphEdges = (function () {
     merge,
     resolveConflicts,
     buildGraph,
+    primaryCollection,
+    assignHues,
     STRATEGY_RANK,
     CONF,
   };
