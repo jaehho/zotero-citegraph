@@ -10,7 +10,8 @@ Zotero 10+ citation graph plugin.
 ## Testing
 
 Always `make check` before handoff or commit: unit tests **plus** the live suite
-in real Zotero (`scripts/live-test.sh`). `make test` alone is not enough.
+in an isolated Zotero (`scripts/live-test.sh` → `~/.local/share/citegraph-test`).
+Never touch the user's profile or installed plugin. `make test` alone is not enough.
 
 ## Commands
 

@@ -35,11 +35,18 @@ OpenAlex only when you press **Fetch OpenAlex**.
 
 ```
 make test          # edge merge / year-guard / conflict unit tests
+make check         # unit tests + live suite in an isolated Zotero
 make xpi           # zip an XPI into build/
 make dev           # source install (quit Zotero first)
 make run           # zotero -purgecaches — use after every edit
-scripts/selftest.sh  # throwaway profile under /tmp — never the real library
+scripts/selftest.sh        # throwaway profile under /tmp — empty library
+scripts/test-zotero-setup.sh  # clone library into ~/.local/share/citegraph-test
 ```
+
+Live tests never touch your profile or installed plugin. They run a second
+Zotero on `~/.local/share/citegraph-test/` (hardlinked PDFs, private sqlite)
+on a silent Hyprland workspace. Re-run `scripts/test-zotero-setup.sh` after
+big library changes so the copy sees them.
 
 Dev loop (official method): quit Zotero → `make dev` once → `make run`.
 After edits: quit → `make run`. Release path is still `make xpi` + Install

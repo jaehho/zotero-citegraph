@@ -1,15 +1,26 @@
 #!/usr/bin/env bash
-# Run the in-Zotero feature suite against the real library (read-only + OpenAlex).
-# Builds the current tree's XPI, installs it over the profile copy, then arms the
-# one-shot suite. Zotero runs on a silent Hyprland workspace so the suite does
-# not steal focus. Writes /tmp/citegraph-live-test.json. Exit 1 on any fail.
+# Run the in-Zotero feature suite against an isolated copy of the real library.
+# Never touches the user's profile, installed plugin, or running Zotero.
+#
+#   scripts/test-zotero-setup.sh   # create/refresh the copy (once, and after big library changes)
+#
+# Builds the current tree's XPI into the test profile, arms the one-shot suite,
+# launches on a silent Hyprland workspace (no focus steal). Writes
+# /tmp/citegraph-live-test.json. Exit 1 on any fail.
 set -euo pipefail
-ROOT=/home/jaeho/projects/zotero-citegraph
+ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 REPORT=/tmp/citegraph-live-test.json
 ARM=/tmp/citegraph-armed
-PROFILE=$(echo "$HOME"/.zotero/zotero/*.default*)
+TEST_ROOT="${CITEGRAPH_TEST_ROOT:-$HOME/.local/share/citegraph-test}"
+DATA="$TEST_ROOT/data"
+PROFILE="$TEST_ROOT/profile"
 ID=$(jq -r .applications.zotero.id "$ROOT/addon/manifest.json")
 RULE_NAME=citegraph-live-silent
+
+if [[ ! -f "$DATA/zotero.sqlite" || ! -f "$PROFILE/user.js" ]]; then
+  echo "test Zotero env missing — running scripts/test-zotero-setup.sh"
+  "$ROOT/scripts/test-zotero-setup.sh"
+fi
 
 # Hyprland: park the test Zotero on a silent workspace (no focus, still renders).
 # grim cannot see hidden workspaces; the suite captures via canvas.toDataURL.
@@ -27,20 +38,11 @@ if [[ -n "${HYPRLAND_INSTANCE_SIGNATURE:-}" ]] && command -v hyprctl >/dev/null;
   " >/dev/null 2>&1 || have_hypr=0
 fi
 
-# Zotero must be down to replace the XPI and flip the sentinel
-if pgrep -x zotero-bin >/dev/null; then
-  pgrep -x zotero-bin | xargs -r kill
-  for _ in $(seq 1 20); do pgrep -x zotero-bin >/dev/null || break; sleep 0.5; done
-fi
-
-# Test what we ship: rebuild and install the working-tree XPI. Overwriting the
-# registered filename keeps the existing plugin-manager entry valid.
-echo "building and installing current tree XPI…"
+# Test what we ship: rebuild and install into the TEST profile only.
+echo "building and installing current tree XPI into test profile…"
 make -C "$ROOT" xpi >/dev/null
 XPI=$(ls -t "$ROOT"/build/zotero-citegraph-*.xpi | head -1)
-rm -f "$PROFILE/extensions/$ID" "$PROFILE/extensions/$ID.xpi"
 cp "$XPI" "$PROFILE/extensions/$ID.xpi"
-sed -i '/extensions\.lastAppBuildId\|extensions\.lastAppVersion/d' "$PROFILE/prefs.js"
 
 rm -f "$REPORT"
 # one-shot sentinel — the plugin consumes and deletes it (prefs stick and leak)
@@ -48,9 +50,7 @@ rm -f "$REPORT"
 
 cleanup() {
   rm -f "$ARM"
-  sed -i "/zotero-citegraph\.selftest/d" "$PROFILE/user.js" "$PROFILE/prefs.js" 2>/dev/null || true
-  # Drop the silent-workspace rule so the next real Zotero is normal, then stop
-  # the hidden test instance (a leftover silent Zotero would block single-instance).
+  # Drop the silent-workspace rule and stop only the TEST instance.
   if [[ "$have_hypr" == 1 ]]; then
     hyprctl eval "
       hl.window_rule({
@@ -62,20 +62,28 @@ cleanup() {
       })
     " >/dev/null 2>&1 || true
   fi
-  if pgrep -x zotero-bin >/dev/null 2>&1; then
-    pkill -x zotero-bin 2>/dev/null || true
+  # Kill by profile command-line match, not by name — the user's real Zotero
+  # (if running) uses a different -profile and must survive.
+  local pids
+  pids=$(pgrep -f "zotero.*-profile ${PROFILE}" 2>/dev/null || true)
+  if [[ -n "$pids" ]]; then
+    # shellcheck disable=SC2086
+    kill $pids 2>/dev/null || true
     for _ in $(seq 1 20); do
-      pgrep -x zotero-bin >/dev/null 2>&1 || break
+      pgrep -f "zotero.*-profile ${PROFILE}" >/dev/null 2>&1 || break
       sleep 0.2
     done
-    pkill -9 -x zotero-bin 2>/dev/null || true
-    pkill -x zotero 2>/dev/null || true
+    pids=$(pgrep -f "zotero.*-profile ${PROFILE}" 2>/dev/null || true)
+    # shellcheck disable=SC2086
+    [[ -n "$pids" ]] && kill -9 $pids 2>/dev/null || true
   fi
 }
 trap cleanup EXIT
 
-echo "starting Zotero for live tests…$([[ $have_hypr == 1 ]] && echo ' (silent workspace)' || echo ' (no hyprctl — may steal focus)')"
-zotero -purgecaches >/tmp/citegraph-live-zotero.log 2>&1 &
+echo "starting test Zotero on silent workspace (real Zotero left alone)…"
+# -no-remote: second instance; does not signal the user's Zotero.
+zotero -profile "$PROFILE" -datadir "$DATA" -no-remote -purgecaches \
+  >/tmp/citegraph-live-zotero.log 2>&1 &
 ZPID=$!
 
 for i in $(seq 1 60); do
@@ -87,7 +95,6 @@ for i in $(seq 1 60); do
     tail -40 /tmp/citegraph-live-zotero.log || true
     exit 1
   fi
-  # Confirm the silent-workspace rule took (once the window exists)
   if [[ $have_hypr == 1 && $i == 4 ]]; then
     ws=$(hyprctl clients -j 2>/dev/null | jq -r '.[] | select(.class=="Zotero") | .workspace.name' | head -1)
     echo "Zotero workspace: ${ws:-not-yet}"

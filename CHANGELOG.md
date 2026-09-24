@@ -12,6 +12,9 @@
 - Legend stacks name paths; node tooltip shows the primary collection.
 - Live suite: build+install the working-tree XPI before running (was testing a
   stale profile XPI); collection-menu check calls `buildCollectionContextMenu`.
+- Live suite runs in an isolated Zotero (`~/.local/share/citegraph-test`, hardlinked
+  PDFs) on a silent workspace — no longer overwrites your installed plugin or
+  kills your running Zotero.
 
 
 ## 0.1.4 — 2026-09-23
