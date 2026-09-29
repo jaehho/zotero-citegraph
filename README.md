@@ -59,4 +59,4 @@ Zotero polls that URL (same as zotero-tray) and installs the new XPI from
 `update_link`. Keep **Tools → Plugins → ⚙ → Update Add-ons Automatically**
 on. Source installs (`make dev`) do not auto-update.
 
-Gotchas: [ISSUES.md](ISSUES.md).
+Gotchas: [issues labeled `gotcha`](https://github.com/jaehho/zotero-citegraph/issues?q=label%3Agotcha).
