@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.1.6 — 2026-10-16
+
+- Fix the item-pane section being destroyed by Fluent localization: the
+  pane/header messages must be attribute form (`.label`/`.tooltiptext`).
+  Symptom was a clipped "Citations" text on the sidenav icon and a section
+  that rendered as a nameless sliver — clicking the icon looked like a no-op.
+- Fix ego rows rendering twice: `onItemChange` and `onRender` both render and
+  await the graph build; a sequence token now drops the superseded render.
+- Row labels follow the index convention (Scopus, Semantic Scholar, OpenAlex):
+  References (outgoing) / Cited by (incoming); was "Builds on"/"Built on by".
+- Live suite asserts the real item-pane DOM (the ego check used a mock body,
+  which let the Fluent break pass) and treats OpenAlex mutuals as a lower
+  bound instead of a pin on the live API snapshot.
+
 ## 0.1.5 — 2026-09-24
 
 - Color-by collection/author: evenly spaced hues over the keys in the graph
