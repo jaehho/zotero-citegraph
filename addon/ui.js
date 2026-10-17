@@ -206,6 +206,11 @@ class CitegraphUI {
   }
 
   async renderEgo(body, item, setEnabled, setSectionSummary) {
+    // onItemChange and onRender both fire per selection change. Each call
+    // wipes the body, then awaits the graph build; without a sequence token
+    // the first-finished call appends its rows after a later call's wipe
+    // already ran — every row renders twice.
+    const seq = (body._citegraphSeq = (body._citegraphSeq || 0) + 1);
     body.textContent = "";
     if (!item?.isRegularItem?.()) {
       setEnabled?.(false);
@@ -213,12 +218,13 @@ class CitegraphUI {
     }
     setEnabled?.(true);
     const graph = await this.graphForItem(item);
-    const buildsOn = graph.edges.filter((e) => e.from === item.key);
-    const builtOnBy = graph.edges.filter((e) => e.to === item.key);
-    setSectionSummary?.(`${buildsOn.length} ← → ${builtOnBy.length}`);
+    if (seq !== body._citegraphSeq) return; // a newer render owns this body
+    const outgoing = graph.edges.filter((e) => e.from === item.key);
+    const incoming = graph.edges.filter((e) => e.to === item.key);
+    setSectionSummary?.(`${outgoing.length} ← → ${incoming.length}`);
 
     const doc = body.ownerDocument;
-    const row = (label, list) => {
+    const row = (label, list, dir) => {
       const wrap = doc.createElement("div");
       wrap.style.cssText = "margin:4px 0";
       const h = doc.createElement("div");
@@ -234,7 +240,7 @@ class CitegraphUI {
         chips.appendChild(none);
       }
       for (const e of list) {
-        const other = graph.nodes.find((n) => n.id === (label === "Builds on" ? e.to : e.from));
+        const other = graph.nodes.find((n) => n.id === (dir === "out" ? e.to : e.from));
         if (!other || other.ghost) continue;
         const chip = doc.createElement("button");
         chip.textContent = other.year ? `${shortAuthor(other)} ${other.year}` : shortAuthor(other);
@@ -254,8 +260,11 @@ class CitegraphUI {
       wrap.appendChild(chips);
       return wrap;
     };
-    body.appendChild(row("Builds on", buildsOn));
-    body.appendChild(row("Built on by", builtOnBy));
+    // Index-standard terminology (Scopus / Semantic Scholar tabs, OpenAlex
+    // "Referenced works" / "Cited by"): outgoing = References, incoming =
+    // Cited by.
+    body.appendChild(row("References", outgoing, "out"));
+    body.appendChild(row("Cited by", incoming, "in"));
   }
 
   // -- graph tab -----------------------------------------------------------
