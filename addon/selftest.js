@@ -139,6 +139,39 @@ var CitegraphSelfTest = (function () {
         ok("ego graph", eg.nodes.length >= 1, `nodes ${eg.nodes.length}`);
       }
 
+      // -- item-pane ego in the real DOM --------------------------------------
+      // Fluent regression: the pane l10n must be attribute-form (.label /
+      // .tooltiptext). A bare value replaces the collapsible-section's DOM
+      // with its text and puts label text inside the 28px sidenav button.
+      try {
+        await pane.itemsView?.waitForLoad?.();
+        await pane.selectItem(item.id);
+      } catch (e) {}
+      await sleep(600); // pane render + Fluent pass
+      const win1 = Zotero.getMainWindows()[0];
+      const secEl = win1.document.querySelector("item-pane-custom-section");
+      ok("ego pane in DOM", !!secEl);
+      if (secEl) {
+        const cs = secEl._section;
+        const titleEl = cs?.querySelector(".title");
+        ok(
+          "pane header DOM intact",
+          !!titleEl && !!(titleEl.textContent || "").trim() && !!cs.querySelector('[data-type="body"]'),
+          `title=${JSON.stringify((cs.textContent || "").slice(0, 30))}`,
+        );
+        const btn1 = win1.document.querySelector('item-pane-sidenav .btn[data-pane^="citegraph"]');
+        ok(
+          "sidenav button text-free",
+          !!btn1 && !(btn1.textContent || "").trim(),
+          JSON.stringify(btn1?.textContent),
+        );
+        ok(
+          "sidenav tooltip localized",
+          !!btn1?.getAttribute("tooltiptext"),
+          btn1?.getAttribute("tooltiptext") || "(none)",
+        );
+      }
+
       // -- OpenAlex ----------------------------------------------------------
       let oaAdded = 0;
       try {
@@ -159,7 +192,15 @@ var CitegraphSelfTest = (function () {
         ui.adapterCache.delete(ui.scopeKey({ kind: "collection", collection }));
         const g2 = await ui.buildGraph({ kind: "collection", collection });
         const m2 = g2.edges.filter((e) => e.mutual).length;
-        ok("OpenAlex mutuals (expect 6)", m2 === 6, `got ${m2}, edges ${g2.edges.length}`);
+        // Lower bound, not a pin: the offline Chiappe shape has 6 mutual pairs
+        // (exact collapse pinned in tests/), and live OpenAlex legitimately
+        // adds more — the count drifts with the API snapshot (saw 7 on
+        // 2026-10-16 after a fresh 46-edge fetch).
+        ok(
+          "OpenAlex mutuals (≥ offline 6)",
+          m2 >= 6,
+          `got ${m2}, edges ${g2.edges.length}`,
+        );
         ok(
           "no reverse into 2025/2026",
           !hasFalsePair(g2) && !olderCitesMuchNewer(g2),
