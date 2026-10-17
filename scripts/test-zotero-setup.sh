@@ -72,6 +72,20 @@ XPI=$(ls -t "$ROOT"/build/zotero-citegraph-*.xpi | head -1)
 cp "$XPI" "$PROFILE/extensions/$ID.xpi"
 echo "installed $(basename "$XPI") → $PROFILE/extensions/$ID.xpi"
 
+# 6) MCP RDP bridge for the zotero-dev MCP (test profile only, never the
+#    user's Zotero). Shared with sibling plugins via ~/projects/zotero/tools/.
+UMBRELLA="$(cd "$ROOT/.." && pwd)"
+BRIDGE_VER=1.0.6
+BRIDGE="$UMBRELLA/tools/zotero-mcp-bridge-$BRIDGE_VER.xpi"
+if [[ ! -f "$BRIDGE" ]]; then
+  mkdir -p "$UMBRELLA/tools"
+  curl -fsSL \
+    "https://github.com/introfini/mcp-server-zotero-dev/releases/download/plugin-v$BRIDGE_VER/zotero-mcp-bridge-$BRIDGE_VER.xpi" \
+    -o "$BRIDGE"
+fi
+cp "$BRIDGE" "$PROFILE/extensions/mcp-rdp@zotero.org.xpi"
+echo "installed mcp-rdp bridge $BRIDGE_VER → test profile"
+
 # how much is real disk vs shared
 echo "data dir:"
 du -sh "$DATA" 2>/dev/null || true
