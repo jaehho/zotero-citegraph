@@ -308,6 +308,47 @@ var CitegraphSelfTest = (function () {
         await sleep(300);
         ok("rebuild action", true);
       }
+
+      // -- performance (#16) -------------------------------------------------
+      // The item pane calls renderEgo from onItemChange and onRender on every
+      // selection, so two builds of one scope start together. Measure them
+      // on the largest collection with a timer that reports how late it ran
+      // (the longest time the main thread could not handle input).
+      const big = await largestCollection();
+      if (big) {
+        const scope = { kind: "collection", collection: big.collection };
+        const key = ui.scopeKey(scope);
+        ui.adapterCache.delete(key);
+        const builds0 = ui.buildCount;
+        let stop = stallMonitor();
+        let t0 = Date.now();
+        await Promise.all([ui.buildGraph(scope), ui.buildGraph(scope)]);
+        const coldMs = Date.now() - t0;
+        const coldStall = stop();
+        const builds = ui.buildCount - builds0;
+        const where = `${big.collection.name} (${big.count} items)`;
+        ok("perf: concurrent builds share one pass", builds === 1, `${builds} passes, ${where}`);
+        ok(
+          "perf: cold build stall < 200 ms",
+          coldStall < 200,
+          `max stall ${coldStall} ms, total ${coldMs} ms, ${where}`,
+        );
+
+        // A rebuild after the graph cache expires (5 min) or is dropped.
+        ui.adapterCache.delete(key);
+        stop = stallMonitor();
+        t0 = Date.now();
+        await ui.buildGraph(scope);
+        const warmMs = Date.now() - t0;
+        const warmStall = stop();
+        ok(
+          "perf: rebuild < 500 ms",
+          warmMs < 500,
+          `total ${warmMs} ms, max stall ${warmStall} ms, ${where}`,
+        );
+      } else {
+        ok("perf: largest collection", false, "no collection");
+      }
     } catch (e) {
       ok("suite crashed", false, e && e.stack ? e.stack : e);
     }
@@ -363,6 +404,38 @@ var CitegraphSelfTest = (function () {
       const b = graph.nodes.find((n) => n.id === e.to);
       return a?.year && b?.year && b.year > a.year + 1;
     });
+  }
+
+  async function largestCollection() {
+    let best = null;
+    for (const lib of Zotero.Libraries.getAll()) {
+      for (const c of Zotero.Collections.getByLibrary(lib.libraryID, true) || []) {
+        await c.loadDataType("childItems").catch(() => {});
+        const count = c.getChildItems(false, false).length;
+        if (!best || count > best.count) best = { collection: c, count };
+      }
+    }
+    return best;
+  }
+
+  /** Start a 20 ms timer; the returned stop() gives its worst lateness. */
+  function stallMonitor(tick = 20) {
+    let last = Date.now();
+    let worst = 0;
+    let on = true;
+    const loop = () => {
+      if (!on) return;
+      const now = Date.now();
+      worst = Math.max(worst, now - last - tick);
+      last = now;
+      setTimeout(loop, tick);
+    };
+    setTimeout(loop, tick);
+    return () => {
+      on = false;
+      worst = Math.max(worst, Date.now() - last - tick);
+      return worst;
+    };
   }
 
   function findByKey(key) {

@@ -82,8 +82,9 @@ trap cleanup EXIT
 
 echo "starting test Zotero on silent workspace (real Zotero left alone)…"
 # -no-remote: second instance; does not signal the user's Zotero.
+# CITEGRAPH_DEBUG=1 adds Zotero's debug output (build timings) to the log.
 zotero -profile "$PROFILE" -datadir "$DATA" -no-remote -purgecaches \
-  >/tmp/citegraph-live-zotero.log 2>&1 &
+  ${CITEGRAPH_DEBUG:+-ZoteroDebugText} >/tmp/citegraph-live-zotero.log 2>&1 &
 ZPID=$!
 
 for i in $(seq 1 60); do

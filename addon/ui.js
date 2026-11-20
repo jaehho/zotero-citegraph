@@ -11,6 +11,7 @@ class CitegraphUI {
     this.paneID = null;
     this.browsers = new Map(); // tabID -> browser
     this.adapterCache = new Map(); // scopeKey -> {graph, builtAt}
+    this.buildCount = 0; // full extraction passes, for the live suite
     this.tabHooksInstalled = new WeakSet();
   }
 
@@ -361,12 +362,16 @@ class CitegraphUI {
     const hit = this.adapterCache.get(key);
     if (hit && Date.now() - hit.builtAt < 5 * 60 * 1000) return hit.graph;
 
-    const adapter = this.makeAdapter(scope);
+    this.buildCount++;
+    const t0 = Date.now();
+    const timing = newTiming();
+    const adapter = this.makeAdapter(scope, timing);
     // Always extract ghosts; the checkbox only filters at draw time so it can
     // flip without a rebuild.
     const graph = await CitegraphEdges.buildGraph(adapter, { includeGhosts: true });
     this.mergeCachedOpenAlex(key, graph);
     this.adapterCache.set(key, { graph, builtAt: Date.now() });
+    log(`built ${key.slice(0, 40)} in ${Date.now() - t0} ms: ${describeTiming(timing)}`);
     return graph;
   }
 
@@ -541,7 +546,7 @@ class CitegraphUI {
   // -- adapter -------------------------------------------------------------
   // Jajaho's ZoteroAdapter contract, slimmed to what we call.
 
-  makeAdapter(scope) {
+  makeAdapter(scope, timing = newTiming()) {
     const self = this;
     const itemByKey = new Map();
     const attsByItem = new Map();
@@ -642,11 +647,15 @@ class CitegraphUI {
         if (!rec) return null;
         const path = ftCachePath(rec._att);
         if (!path) return null;
+        const t = Date.now();
         try {
           if (!(await IOUtils.exists(path))) return null;
           return await Zotero.File.getContentsAsync(path, "utf-8");
         } catch (e) {
           return null;
+        } finally {
+          timing.texts++;
+          timing.textReadMs += Date.now() - t;
         }
       },
 
@@ -655,8 +664,17 @@ class CitegraphUI {
         const rec = atts.find((a) => a.key === attKey);
         if (!rec || rec.contentType !== "application/pdf") return [];
         try {
+          const t = Date.now();
           const bytes = await IOUtils.read(rec.file);
-          return scanUriAnnotations(bytes, inflater());
+          const t1 = Date.now();
+          const uris = scanUriAnnotations(bytes, inflater());
+          const scan = Date.now() - t1;
+          timing.pdfs++;
+          timing.pdfBytes += bytes.length;
+          timing.pdfReadMs += t1 - t;
+          timing.pdfScanMs += scan;
+          timing.pdfScanMaxMs = Math.max(timing.pdfScanMaxMs, scan);
+          return uris;
         } catch (e) {
           return [];
         }
@@ -666,6 +684,27 @@ class CitegraphUI {
 }
 
 // -- shared helpers (Jajaho-slim) ------------------------------------------
+
+function newTiming() {
+  return {
+    pdfs: 0,
+    pdfBytes: 0,
+    pdfReadMs: 0,
+    pdfScanMs: 0,
+    pdfScanMaxMs: 0,
+    texts: 0,
+    textReadMs: 0,
+  };
+}
+
+function describeTiming(t) {
+  const mb = (t.pdfBytes / 1048576).toFixed(1);
+  return (
+    `${t.pdfs} PDFs (${mb} MB) read ${t.pdfReadMs} ms, ` +
+    `scanned ${t.pdfScanMs} ms (max ${t.pdfScanMaxMs} ms); ` +
+    `${t.texts} texts read ${t.textReadMs} ms`
+  );
+}
 
 function log(msg) {
   Zotero.debug(`Citation Graph: ${msg}`);
