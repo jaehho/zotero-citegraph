@@ -26,7 +26,7 @@ That is the whole control surface. No physics sliders.
 Hover a node for title, authors, year, DOI, PDF badge, cited-here.
 Hover an edge for `A cites B` / `mutual citations`, provenance (`via`), confidence.
 
-The item pane **Citations** section shows Builds on / Built on by.
+The item pane **Citations** section shows References / Cited by for the selected item, counting papers in your library only.
 
 Offline strategies (always): pdf-links, text-doi, extra-doi, title-match.
 OpenAlex only when you press **Fetch OpenAlex**.
