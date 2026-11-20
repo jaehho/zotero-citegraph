@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.1.7 — 2026-11-20
+
+- Fix Zotero freezing for seconds on a right-click, Move to Trash or any
+  selection (#16). The item-pane section built its collection's graph
+  twice per selection on the main thread, reading and scanning every PDF
+  each time. Concurrent builds now share one pass, PDF link scanning runs
+  in a worker, and each PDF's links are kept until the file changes, in
+  `citegraph/pdf-links.json` in the data directory, so a restart does not
+  rescan.
+- Live suite measures build passes, the longest main-thread stall and
+  build times (`CITEGRAPH_DEBUG=1 make check` logs per-phase timings).
+
 ## 0.1.6 — 2026-10-16
 
 - Fix the item-pane section being destroyed by Fluent localization: the
