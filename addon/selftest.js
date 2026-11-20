@@ -328,6 +328,7 @@ var CitegraphSelfTest = (function () {
         const builds = ui.buildCount - builds0;
         const where = `${big.collection.name} (${big.count} items)`;
         ok("perf: concurrent builds share one pass", builds === 1, `${builds} passes, ${where}`);
+        ok("perf: PDFs scanned in a worker", ui.scanner.mode === "worker" && !!ui.scanner.worker, ui.scanner.mode);
         ok(
           "perf: cold build stall < 200 ms",
           coldStall < 200,

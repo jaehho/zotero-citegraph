@@ -20,6 +20,7 @@ async function startup({ id, version, rootURI }, reason) {
   resProto.setSubstitution("citegraph", Services.io.newURI(rootURI));
 
   Services.scriptloader.loadSubScript(rootURI + "edges.js");
+  Services.scriptloader.loadSubScript(rootURI + "pdfscan.js");
   Services.scriptloader.loadSubScript(rootURI + "openalex.js");
   Services.scriptloader.loadSubScript(rootURI + "ui.js");
 
