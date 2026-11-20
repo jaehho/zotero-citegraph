@@ -11,6 +11,10 @@ class CitegraphUI {
     this.paneID = null;
     this.browsers = new Map(); // tabID -> browser
     this.adapterCache = new Map(); // scopeKey -> {graph, builtAt}
+    this.building = new Map(); // scopeKey -> in-flight build promise
+    this.buildCount = 0; // full extraction passes, for the live suite
+    this.scanner = new PdfScanner("resource://" + this.resRoot + "/scan-worker.js");
+    this.pdfLinks = new PdfLinkCache();
     this.tabHooksInstalled = new WeakSet();
   }
 
@@ -38,6 +42,9 @@ class CitegraphUI {
     }
     this.browsers.clear();
     this.adapterCache.clear();
+    this.building.clear();
+    this.scanner.stop();
+    this.pdfLinks.clear();
   }
 
   attach(win) {
@@ -356,17 +363,49 @@ class CitegraphUI {
     return this.buildGraph(scope);
   }
 
+  /** Drop a scope's graph and any build in flight, so the next call rebuilds. */
+  invalidate(key) {
+    this.adapterCache.delete(key);
+    this.building.delete(key);
+  }
+
   async buildGraph(scope) {
     const key = this.scopeKey(scope);
     const hit = this.adapterCache.get(key);
     if (hit && Date.now() - hit.builtAt < 5 * 60 * 1000) return hit.graph;
+    // The item pane asks twice per selection (onItemChange and onRender), and
+    // the graph is cached only once built: share the pass already running.
+    let pending = this.building.get(key);
+    if (!pending) {
+      pending = this.extractGraph(scope, key)
+        .then((graph) => {
+          // invalidate() during the pass makes this result stale: hand it to
+          // the callers already waiting, but do not cache it.
+          if (this.building.get(key) === pending) {
+            this.adapterCache.set(key, { graph, builtAt: Date.now() });
+          }
+          return graph;
+        })
+        .finally(() => {
+          if (this.building.get(key) === pending) this.building.delete(key);
+        });
+      this.building.set(key, pending);
+    }
+    return pending;
+  }
 
-    const adapter = this.makeAdapter(scope);
+  async extractGraph(scope, key) {
+    this.buildCount++;
+    const t0 = Date.now();
+    const timing = newTiming();
+    const adapter = this.makeAdapter(scope, timing);
     // Always extract ghosts; the checkbox only filters at draw time so it can
     // flip without a rebuild.
     const graph = await CitegraphEdges.buildGraph(adapter, { includeGhosts: true });
     this.mergeCachedOpenAlex(key, graph);
-    this.adapterCache.set(key, { graph, builtAt: Date.now() });
+    await this.pdfLinks.save();
+    this.lastTiming = timing;
+    log(`built ${key.slice(0, 40)} in ${Date.now() - t0} ms: ${describeTiming(timing)}`);
     return graph;
   }
 
@@ -410,7 +449,7 @@ class CitegraphUI {
       select: true,
       onClose: () => {
         this.browsers.delete(tabID);
-        this.adapterCache.delete(this.scopeKey(scope));
+        this.invalidate(this.scopeKey(scope));
       },
     });
     id = tabID;
@@ -479,7 +518,7 @@ class CitegraphUI {
       return;
     }
     if (action.type === "rebuild") {
-      this.adapterCache.delete(this.scopeKey(scope));
+      this.invalidate(this.scopeKey(scope));
       const graph = await this.buildGraph(scope);
       this.sendTo(browser, "data", { graph });
       return;
@@ -504,7 +543,7 @@ class CitegraphUI {
         const { edges } = await CitegraphOpenAlex.fetchEdges(dois, oaToKey);
         await this.saveOpenAlexCache(this.scopeKey(scope), edges);
         // Rebuild offline + cache so via/stats stay consistent.
-        this.adapterCache.delete(this.scopeKey(scope));
+        this.invalidate(this.scopeKey(scope));
         const merged = await this.buildGraph(scope);
         this.sendTo(browser, "data", { graph: merged, openalex: { added: edges.length } });
       } catch (err) {
@@ -541,7 +580,7 @@ class CitegraphUI {
   // -- adapter -------------------------------------------------------------
   // Jajaho's ZoteroAdapter contract, slimmed to what we call.
 
-  makeAdapter(scope) {
+  makeAdapter(scope, timing = newTiming()) {
     const self = this;
     const itemByKey = new Map();
     const attsByItem = new Map();
@@ -642,11 +681,15 @@ class CitegraphUI {
         if (!rec) return null;
         const path = ftCachePath(rec._att);
         if (!path) return null;
+        const t = Date.now();
         try {
           if (!(await IOUtils.exists(path))) return null;
           return await Zotero.File.getContentsAsync(path, "utf-8");
         } catch (e) {
           return null;
+        } finally {
+          timing.texts++;
+          timing.textReadMs += Date.now() - t;
         }
       },
 
@@ -655,8 +698,26 @@ class CitegraphUI {
         const rec = atts.find((a) => a.key === attKey);
         if (!rec || rec.contentType !== "application/pdf") return [];
         try {
+          // A PDF's links change only with the file, so scan each version once.
+          const { size, lastModified } = await IOUtils.stat(rec.file);
+          const id = `${rec._att.libraryID}/${attKey}`;
+          const saved = await self.pdfLinks.get(id, size, lastModified);
+          if (saved) {
+            timing.pdfCached++;
+            return saved;
+          }
+          const t = Date.now();
           const bytes = await IOUtils.read(rec.file);
-          return scanUriAnnotations(bytes, inflater());
+          const t1 = Date.now();
+          timing.pdfs++;
+          timing.pdfBytes += bytes.length;
+          timing.pdfReadMs += t1 - t;
+          const uris = await self.scanner.scan(bytes, rec.file);
+          const scan = Date.now() - t1;
+          timing.pdfScanMs += scan;
+          timing.pdfScanMaxMs = Math.max(timing.pdfScanMaxMs, scan);
+          self.pdfLinks.set(id, size, lastModified, uris);
+          return uris;
         } catch (e) {
           return [];
         }
@@ -666,6 +727,182 @@ class CitegraphUI {
 }
 
 // -- shared helpers (Jajaho-slim) ------------------------------------------
+
+/**
+ * Scans PDF bytes in a worker. If the worker cannot start, scans on the main
+ * thread as before, so the graph still builds.
+ */
+class PdfScanner {
+  constructor(url) {
+    this.url = url;
+    this.worker = null;
+    this.failed = false;
+    this.lastID = 0;
+    this.waiting = new Map(); // id -> {resolve, file}
+  }
+
+  get mode() {
+    return this.failed ? "main thread" : "worker";
+  }
+
+  start() {
+    if (this.worker || this.failed) return this.worker;
+    try {
+      const W =
+        (typeof ChromeWorker !== "undefined" && ChromeWorker) ||
+        (typeof Worker !== "undefined" && Worker) ||
+        Zotero.getMainWindow()?.ChromeWorker;
+      this.worker = new W(this.url);
+      this.worker.onmessage = (e) => this.onReply(e.data);
+      this.worker.onerror = (e) => this.onFailure(e?.message || "worker error");
+    } catch (e) {
+      this.onFailure(String(e));
+    }
+    return this.worker;
+  }
+
+  /** URIs found in `bytes`; the bytes are handed to the worker, not copied. */
+  scan(bytes, file) {
+    const worker = this.start();
+    if (!worker) return Promise.resolve(scanOnMainThread(bytes));
+    const id = ++this.lastID;
+    return new Promise((resolve) => {
+      this.waiting.set(id, { resolve, file });
+      worker.postMessage({ id, bytes }, [bytes.buffer]);
+    });
+  }
+
+  onReply({ id, uris, error }) {
+    const w = this.waiting.get(id);
+    if (!w) return;
+    this.waiting.delete(id);
+    if (error) log(`scan ${w.file}: ${error}`);
+    w.resolve(uris || []);
+  }
+
+  onFailure(msg) {
+    log(`scan worker failed, scanning on the main thread: ${msg}`);
+    this.failed = true;
+    this.worker?.terminate();
+    this.worker = null;
+    // Their bytes went to the worker: read the files again.
+    const waiting = [...this.waiting.values()];
+    this.waiting.clear();
+    for (const w of waiting) {
+      IOUtils.read(w.file)
+        .then((bytes) => w.resolve(scanOnMainThread(bytes)))
+        .catch(() => w.resolve([]));
+    }
+  }
+
+  stop() {
+    this.worker?.terminate();
+    this.worker = null;
+    for (const w of this.waiting.values()) w.resolve([]);
+    this.waiting.clear();
+  }
+}
+
+/**
+ * Each PDF's link URIs, keyed "libraryID/attachmentKey" and valid while the
+ * file keeps its size and mtime. Saved to citegraph/pdf-links.json in the
+ * data directory so a restart does not rescan every PDF.
+ */
+class PdfLinkCache {
+  constructor() {
+    this.entries = new Map(); // id -> {size, mtime, uris}
+    this.loading = null;
+    this.dirty = false;
+    this.saving = Promise.resolve();
+  }
+
+  get path() {
+    return PathUtils.join(Zotero.DataDirectory.dir, "citegraph", "pdf-links.json");
+  }
+
+  load() {
+    this.loading ||= (async () => {
+      try {
+        const data = JSON.parse(await IOUtils.readUTF8(this.path));
+        if (data?.version !== 1) return;
+        for (const [id, e] of Object.entries(data.pdfs || {})) this.entries.set(id, e);
+      } catch (e) {
+        // Missing or unreadable: every PDF is scanned again.
+      }
+    })();
+    return this.loading;
+  }
+
+  /** The saved URIs, or null when the PDF is new or has changed. */
+  async get(id, size, mtime) {
+    await this.load();
+    const e = this.entries.get(id);
+    return e && e.size === size && e.mtime === mtime ? e.uris : null;
+  }
+
+  set(id, size, mtime, uris) {
+    this.entries.set(id, { size, mtime, uris });
+    this.dirty = true;
+  }
+
+  /** Write the file if anything was scanned, dropping deleted attachments. */
+  save() {
+    if (!this.dirty) return this.saving;
+    this.dirty = false;
+    this.saving = this.saving
+      .then(async () => {
+        for (const id of [...this.entries.keys()]) {
+          const [lib, key] = id.split("/");
+          if (!Zotero.Items.getByLibraryAndKey(Number(lib), key)) this.entries.delete(id);
+        }
+        const json = JSON.stringify({ version: 1, pdfs: Object.fromEntries(this.entries) });
+        await IOUtils.makeDirectory(PathUtils.parent(this.path), { ignoreExisting: true });
+        await IOUtils.writeUTF8(this.path, json, { tmpPath: this.path + ".tmp" });
+      })
+      .catch((e) => log("saving pdf-links.json: " + e));
+    return this.saving;
+  }
+
+  /** Forget the in-memory copy; the next get() reads the file again. */
+  clear() {
+    this.entries.clear();
+    this.loading = null;
+    this.dirty = false;
+  }
+
+  /** Forget everything, file included (live suite: a truly cold build). */
+  async reset() {
+    await this.saving;
+    this.clear();
+    await IOUtils.remove(this.path, { ignoreAbsent: true });
+  }
+}
+
+function scanOnMainThread(bytes) {
+  return CitegraphPdfScan.scanUriAnnotations(bytes, inflater());
+}
+
+function newTiming() {
+  return {
+    pdfCached: 0,
+    pdfs: 0,
+    pdfBytes: 0,
+    pdfReadMs: 0,
+    pdfScanMs: 0,
+    pdfScanMaxMs: 0,
+    texts: 0,
+    textReadMs: 0,
+  };
+}
+
+function describeTiming(t) {
+  const mb = (t.pdfBytes / 1048576).toFixed(1);
+  return (
+    `${t.pdfCached} PDFs unchanged; ${t.pdfs} PDFs (${mb} MB) read ${t.pdfReadMs} ms, ` +
+    `scanned ${t.pdfScanMs} ms (max ${t.pdfScanMaxMs} ms); ` +
+    `${t.texts} texts read ${t.textReadMs} ms`
+  );
+}
 
 function log(msg) {
   Zotero.debug(`Citation Graph: ${msg}`);
@@ -714,45 +951,6 @@ function ftCachePath(att) {
   }
 }
 
-const URI_RE = /\/URI\s*\(((?:[^()\\]|\\[\s\S])*)\)/g;
-const STREAM_RE = /(?<!end)stream\r?\n/g;
-const LENGTH_RE = /\/Length\s+(\d+)(?![\d\s]*R)/;
-
-function scanUriAnnotations(bytes, inflate) {
-  const s = bytesToBinaryString(bytes);
-  const uris = new Set();
-  collectUris(s, uris);
-  if (!inflate) return [...uris];
-  STREAM_RE.lastIndex = 0;
-  let m;
-  while ((m = STREAM_RE.exec(s))) {
-    const start = m.index + m[0].length;
-    const end = s.indexOf("endstream", start);
-    if (end < 0) break;
-    STREAM_RE.lastIndex = end;
-    const head = s.slice(Math.max(0, m.index - 1024), m.index);
-    const at = head.lastIndexOf("obj");
-    if (at < 0) continue;
-    const dict = head.slice(at);
-    if (!dict.includes("/ObjStm") || !dict.includes("/FlateDecode")) continue;
-    const len = LENGTH_RE.exec(dict);
-    let stop = len && start + Number(len[1]) <= end ? start + Number(len[1]) : end;
-    if (stop === end) {
-      while (stop > start && (s[stop - 1] === "\n" || s[stop - 1] === "\r")) stop--;
-    }
-    try {
-      collectUris(bytesToBinaryString(inflate(bytes.subarray(start, stop))), uris);
-    } catch (e) {}
-  }
-  return [...uris];
-}
-
-function collectUris(s, uris) {
-  URI_RE.lastIndex = 0;
-  let m;
-  while ((m = URI_RE.exec(s))) uris.add(m[1].replace(/\\([()\\])/g, "$1"));
-}
-
 let _pako;
 function inflater() {
   if (_pako === undefined) {
@@ -767,11 +965,3 @@ function inflater() {
   return _pako ? (b) => _pako.inflate(b) : null;
 }
 
-function bytesToBinaryString(bytes) {
-  const CHUNK = 0x8000;
-  const parts = [];
-  for (let i = 0; i < bytes.length; i += CHUNK) {
-    parts.push(String.fromCharCode.apply(null, bytes.subarray(i, i + CHUNK)));
-  }
-  return parts.join("");
-}
