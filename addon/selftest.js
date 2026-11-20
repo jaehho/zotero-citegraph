@@ -318,7 +318,8 @@ var CitegraphSelfTest = (function () {
       if (big) {
         const scope = { kind: "collection", collection: big.collection };
         const key = ui.scopeKey(scope);
-        ui.adapterCache.delete(key);
+        ui.invalidate(key);
+        await ui.pdfLinks.reset(); // cold: no PDF scanned yet, in memory or on disk
         const builds0 = ui.buildCount;
         let stop = stallMonitor();
         let t0 = Date.now();
@@ -346,6 +347,21 @@ var CitegraphSelfTest = (function () {
           "perf: rebuild < 500 ms",
           warmMs < 500,
           `total ${warmMs} ms, max stall ${warmStall} ms, ${where}`,
+        );
+
+        // After a restart only the saved file is left.
+        const saved = await IOUtils.exists(ui.pdfLinks.path);
+        ok("perf: scans saved to disk", saved, ui.pdfLinks.path);
+        ui.pdfLinks.clear();
+        ui.invalidate(key);
+        t0 = Date.now();
+        await ui.buildGraph(scope);
+        const restartMs = Date.now() - t0;
+        const read = ui.lastTiming?.pdfs;
+        ok(
+          "perf: build after restart reads no PDF, < 500 ms",
+          saved && read === 0 && restartMs < 500,
+          `${read} PDFs read, total ${restartMs} ms, ${where}`,
         );
       } else {
         ok("perf: largest collection", false, "no collection");

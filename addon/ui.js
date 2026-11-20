@@ -14,7 +14,7 @@ class CitegraphUI {
     this.building = new Map(); // scopeKey -> in-flight build promise
     this.buildCount = 0; // full extraction passes, for the live suite
     this.scanner = new PdfScanner("resource://" + this.resRoot + "/scan-worker.js");
-    this.pdfLinks = new Map(); // attachment key -> {size, mtime, uris}
+    this.pdfLinks = new PdfLinkCache();
     this.tabHooksInstalled = new WeakSet();
   }
 
@@ -403,6 +403,8 @@ class CitegraphUI {
     // flip without a rebuild.
     const graph = await CitegraphEdges.buildGraph(adapter, { includeGhosts: true });
     this.mergeCachedOpenAlex(key, graph);
+    await this.pdfLinks.save();
+    this.lastTiming = timing;
     log(`built ${key.slice(0, 40)} in ${Date.now() - t0} ms: ${describeTiming(timing)}`);
     return graph;
   }
@@ -698,10 +700,11 @@ class CitegraphUI {
         try {
           // A PDF's links change only with the file, so scan each version once.
           const { size, lastModified } = await IOUtils.stat(rec.file);
-          const hit = self.pdfLinks.get(attKey);
-          if (hit && hit.size === size && hit.mtime === lastModified) {
+          const id = `${rec._att.libraryID}/${attKey}`;
+          const saved = await self.pdfLinks.get(id, size, lastModified);
+          if (saved) {
             timing.pdfCached++;
-            return hit.uris;
+            return saved;
           }
           const t = Date.now();
           const bytes = await IOUtils.read(rec.file);
@@ -713,7 +716,7 @@ class CitegraphUI {
           const scan = Date.now() - t1;
           timing.pdfScanMs += scan;
           timing.pdfScanMaxMs = Math.max(timing.pdfScanMaxMs, scan);
-          self.pdfLinks.set(attKey, { size, mtime: lastModified, uris });
+          self.pdfLinks.set(id, size, lastModified, uris);
           return uris;
         } catch (e) {
           return [];
@@ -797,6 +800,81 @@ class PdfScanner {
     this.worker = null;
     for (const w of this.waiting.values()) w.resolve([]);
     this.waiting.clear();
+  }
+}
+
+/**
+ * Each PDF's link URIs, keyed "libraryID/attachmentKey" and valid while the
+ * file keeps its size and mtime. Saved to citegraph/pdf-links.json in the
+ * data directory so a restart does not rescan every PDF.
+ */
+class PdfLinkCache {
+  constructor() {
+    this.entries = new Map(); // id -> {size, mtime, uris}
+    this.loading = null;
+    this.dirty = false;
+    this.saving = Promise.resolve();
+  }
+
+  get path() {
+    return PathUtils.join(Zotero.DataDirectory.dir, "citegraph", "pdf-links.json");
+  }
+
+  load() {
+    this.loading ||= (async () => {
+      try {
+        const data = JSON.parse(await IOUtils.readUTF8(this.path));
+        if (data?.version !== 1) return;
+        for (const [id, e] of Object.entries(data.pdfs || {})) this.entries.set(id, e);
+      } catch (e) {
+        // Missing or unreadable: every PDF is scanned again.
+      }
+    })();
+    return this.loading;
+  }
+
+  /** The saved URIs, or null when the PDF is new or has changed. */
+  async get(id, size, mtime) {
+    await this.load();
+    const e = this.entries.get(id);
+    return e && e.size === size && e.mtime === mtime ? e.uris : null;
+  }
+
+  set(id, size, mtime, uris) {
+    this.entries.set(id, { size, mtime, uris });
+    this.dirty = true;
+  }
+
+  /** Write the file if anything was scanned, dropping deleted attachments. */
+  save() {
+    if (!this.dirty) return this.saving;
+    this.dirty = false;
+    this.saving = this.saving
+      .then(async () => {
+        for (const id of [...this.entries.keys()]) {
+          const [lib, key] = id.split("/");
+          if (!Zotero.Items.getByLibraryAndKey(Number(lib), key)) this.entries.delete(id);
+        }
+        const json = JSON.stringify({ version: 1, pdfs: Object.fromEntries(this.entries) });
+        await IOUtils.makeDirectory(PathUtils.parent(this.path), { ignoreExisting: true });
+        await IOUtils.writeUTF8(this.path, json, { tmpPath: this.path + ".tmp" });
+      })
+      .catch((e) => log("saving pdf-links.json: " + e));
+    return this.saving;
+  }
+
+  /** Forget the in-memory copy; the next get() reads the file again. */
+  clear() {
+    this.entries.clear();
+    this.loading = null;
+    this.dirty = false;
+  }
+
+  /** Forget everything, file included (live suite: a truly cold build). */
+  async reset() {
+    await this.saving;
+    this.clear();
+    await IOUtils.remove(this.path, { ignoreAbsent: true });
   }
 }
 
