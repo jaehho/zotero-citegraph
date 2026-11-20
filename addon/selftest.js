@@ -137,6 +137,14 @@ var CitegraphSelfTest = (function () {
         ok("ego renders", true, summary);
         const eg = await ui.graphForItem(item);
         ok("ego graph", eg.nodes.length >= 1, `nodes ${eg.nodes.length}`);
+        const heldIDs = new Set(eg.nodes.filter((n) => !n.ghost).map((n) => n.id));
+        const refs = eg.edges.filter((e) => e.from === item.key && heldIDs.has(e.to)).length;
+        const citedBy = eg.edges.filter((e) => e.to === item.key && heldIDs.has(e.from)).length;
+        ok(
+          "ego summary counts held items only",
+          summary === `${refs} ← → ${citedBy}`,
+          `summary ${summary}, held ${refs} ← → ${citedBy}`,
+        );
       }
 
       // -- item-pane ego in the real DOM --------------------------------------

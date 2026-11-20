@@ -226,8 +226,11 @@ class CitegraphUI {
     setEnabled?.(true);
     const graph = await this.graphForItem(item);
     if (seq !== body._citegraphSeq) return; // a newer render owns this body
-    const outgoing = graph.edges.filter((e) => e.from === item.key);
-    const incoming = graph.edges.filter((e) => e.to === item.key);
+    // Count and show held items only. Ghosts (cited DOIs not in the library)
+    // have no chip, so counting them made "115" sit over a handful of chips.
+    const held = new Map(graph.nodes.filter((n) => !n.ghost).map((n) => [n.id, n]));
+    const outgoing = graph.edges.filter((e) => e.from === item.key && held.has(e.to));
+    const incoming = graph.edges.filter((e) => e.to === item.key && held.has(e.from));
     setSectionSummary?.(`${outgoing.length} ← → ${incoming.length}`);
 
     const doc = body.ownerDocument;
@@ -247,8 +250,7 @@ class CitegraphUI {
         chips.appendChild(none);
       }
       for (const e of list) {
-        const other = graph.nodes.find((n) => n.id === (dir === "out" ? e.to : e.from));
-        if (!other || other.ghost) continue;
+        const other = held.get(dir === "out" ? e.to : e.from);
         const chip = doc.createElement("button");
         chip.textContent = other.year ? `${shortAuthor(other)} ${other.year}` : shortAuthor(other);
         chip.title = other.title;
