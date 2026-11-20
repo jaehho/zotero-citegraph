@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.1.8 — 2026-11-20
+
+- Fix the item pane's Citations summary counting references outside the
+  library: one paper read 115 over 7 chips. The summary and chips now
+  both count papers in the library only, and an item whose references
+  are all outside it shows the empty dash.
+
 ## 0.1.7 — 2026-11-20
 
 - Fix Zotero freezing for seconds on a right-click, Move to Trash or any
