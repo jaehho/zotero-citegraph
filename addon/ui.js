@@ -658,8 +658,9 @@ class CitegraphUI {
         const out = [];
         const item = itemByKey.get(itemKey);
         if (item) {
+          // Primary data (link mode, content type, path) is all this needs;
+          // loadDataTypes here ran two annotation queries per item.
           const atts = await Zotero.Items.getAsync(item.getAttachments());
-          await Zotero.Items.loadDataTypes(atts);
           for (const att of atts) {
             if (att.attachmentLinkMode === Zotero.Attachments.LINK_MODE_LINKED_URL) continue;
             const file = await att.getFilePathAsync();
