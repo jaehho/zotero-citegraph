@@ -220,3 +220,40 @@ test("chiappe shape: 6 mutual pairs collapse, 2024↛2026 dropped", () => {
     if (yf && yt) assert.ok(yt <= yf + 1, `${e.from}→${e.to}`);
   }
 });
+
+test("matchTitles finds titles at word starts and skips short ones", () => {
+  const index = E.titleIndex([
+    "Deep learning for neural circuit reconstruction", // 0
+    "Methods", // 1: too short to match
+    "Neural circuit reconstruction at synaptic resolution", // 2
+    "Learning for neural circuit reconstruction and beyond", // 3: not present
+  ]);
+  const text =
+    "[1] Smith J. Neural circuit reconstruction at synaptic resolution. Nature.\n" +
+    "[2] Lee K. Deep learning for neural-circuit reconstruction. Methods 2020.";
+  assert.deepEqual(E.matchTitles(text, index), [0, 2]);
+  // Inside a longer word is not a title.
+  assert.deepEqual(E.matchTitles("subdeep learning for neural circuit reconstruction", index), []);
+});
+
+test("buildGraph maps title and DOI hits in a text to the right items", async () => {
+  const items = [
+    { key: "A", title: "A survey of connectome reconstruction methods", year: 2024, doi: "10.1000/a1" },
+    { key: "B", title: "Deep learning for neural circuit reconstruction", year: 2020, doi: "10.1000/b1" },
+    { key: "C", title: "Neural circuit reconstruction at synaptic resolution", year: 2019, doi: "10.1000/c1" },
+  ];
+  const body = "Introduction. ".repeat(40);
+  const refs =
+    "References\n[1] Deep learning for neural circuit reconstruction. 2020.\n" +
+    "[2] Someone. Unrelated work. https://doi.org/10.1000/c1\n";
+  const adapter = {
+    listItems: async () => items,
+    getAttachments: async (key) =>
+      key === "A" ? [{ key: "A1", parentKey: "A", contentType: "text/plain" }] : [],
+    getPdfLinkUris: async () => [],
+    getAttachmentText: async (attKey) => (attKey === "A1" ? body + "\n" + refs : null),
+  };
+  const g = await E.buildGraph(adapter);
+  const got = g.edges.map((e) => `${e.from}>${e.to} ${e.via.join("+")}`).sort();
+  assert.deepEqual(got, ["A>B title-match", "A>C text-doi"]);
+});

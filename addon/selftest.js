@@ -329,32 +329,44 @@ var CitegraphSelfTest = (function () {
         ui.invalidate(key);
         await ui.pdfLinks.reset(); // cold: no PDF scanned yet, in memory or on disk
         const builds0 = ui.buildCount;
+        const texts0 = ui.scanner.replies.text;
         let stop = stallMonitor();
         let t0 = Date.now();
         await Promise.all([ui.buildGraph(scope), ui.buildGraph(scope)]);
         const coldMs = Date.now() - t0;
-        const coldStall = stop();
+        const cold = stop();
         const builds = ui.buildCount - builds0;
         const where = `${big.collection.name} (${big.count} items)`;
         ok("perf: concurrent builds share one pass", builds === 1, `${builds} passes, ${where}`);
         ok("perf: PDFs scanned in a worker", ui.scanner.mode === "worker" && !!ui.scanner.worker, ui.scanner.mode);
+        const inWorker = ui.scanner.replies.text - texts0;
+        ok(
+          "perf: texts analyzed in the worker",
+          inWorker > 0 && inWorker === ui.lastTiming?.texts,
+          `${inWorker} of ${ui.lastTiming?.texts} texts`,
+        );
         ok(
           "perf: cold build stall < 200 ms",
-          coldStall < 200,
-          `max stall ${coldStall} ms, total ${coldMs} ms, ${where}`,
+          cold.worst < 200,
+          `max stall ${cold.worst} ms, busy ${cold.busy} ms, total ${coldMs} ms, ${where}`,
         );
 
         // A rebuild after the graph cache expires (5 min) or is dropped.
-        ui.adapterCache.delete(key);
-        stop = stallMonitor();
-        t0 = Date.now();
-        await ui.buildGraph(scope);
-        const warmMs = Date.now() - t0;
-        const warmStall = stop();
+        // Three runs: one run's numbers swing with the disk cache.
+        const warm = [];
+        for (let i = 0; i < 3; i++) {
+          ui.adapterCache.delete(key);
+          stop = stallMonitor();
+          t0 = Date.now();
+          await ui.buildGraph(scope);
+          warm.push({ ms: Date.now() - t0, ...stop() });
+        }
+        const runs = (f) => warm.map(f).join("/");
         ok(
           "perf: rebuild < 500 ms",
-          warmMs < 500,
-          `total ${warmMs} ms, max stall ${warmStall} ms, ${where}`,
+          Math.max(...warm.map((w) => w.ms)) < 500,
+          `total ${runs((w) => w.ms)} ms, max stall ${runs((w) => w.worst)} ms, ` +
+            `busy ${runs((w) => w.busy)} ms, ${ui.lastTiming?.texts} texts, ${where}`,
         );
 
         // After a restart only the saved file is left.
@@ -431,35 +443,50 @@ var CitegraphSelfTest = (function () {
     });
   }
 
+  /** The collection whose graph reads the most items, subcollections included. */
   async function largestCollection() {
-    let best = null;
+    const all = [];
     for (const lib of Zotero.Libraries.getAll()) {
-      for (const c of Zotero.Collections.getByLibrary(lib.libraryID, true) || []) {
-        await c.loadDataType("childItems").catch(() => {});
-        const count = c.getChildItems(false, false).length;
-        if (!best || count > best.count) best = { collection: c, count };
+      all.push(...(Zotero.Collections.getByLibrary(lib.libraryID, true) || []));
+    }
+    for (const c of all) await c.loadDataType("childItems").catch(() => {});
+    let best = null;
+    for (const c of all) {
+      const ids = new Set(c.getChildItems(true, false));
+      for (const d of c.getDescendents(false, "collection")) {
+        for (const id of Zotero.Collections.get(d.id)?.getChildItems(true, false) || []) ids.add(id);
       }
+      if (!best || ids.size > best.count) best = { collection: c, count: ids.size };
     }
     return best;
   }
 
-  /** Start a 20 ms timer; the returned stop() gives its worst lateness. */
+  /**
+   * Start a 20 ms timer. The returned stop() gives its worst lateness (the
+   * longest input wait) and the sum of its lateness (roughly the time the
+   * main thread spent busy).
+   */
   function stallMonitor(tick = 20) {
     let last = Date.now();
     let worst = 0;
+    let busy = 0;
     let on = true;
+    const note = (now) => {
+      const late = Math.max(0, now - last - tick);
+      worst = Math.max(worst, late);
+      busy += late;
+      last = now;
+    };
     const loop = () => {
       if (!on) return;
-      const now = Date.now();
-      worst = Math.max(worst, now - last - tick);
-      last = now;
+      note(Date.now());
       setTimeout(loop, tick);
     };
     setTimeout(loop, tick);
     return () => {
       on = false;
-      worst = Math.max(worst, Date.now() - last - tick);
-      return worst;
+      note(Date.now());
+      return { worst, busy };
     };
   }
 
