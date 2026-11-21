@@ -340,7 +340,7 @@ class CitegraphUI {
     };
     return {
       sizeBy: p("sizeBy", "cited-here"),
-      colorBy: p("colorBy", "year"),
+      colorBy: p("colorBy", "group"),
       // Ghosts off by default: a 11-paper collection expands to 500+ DOI stubs.
       showGhosts: p("showGhosts", false),
     };

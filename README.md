@@ -23,6 +23,8 @@ Right-click a collection or selected items → **Show Citation Graph**.
 Top bar: search · Rebuild · Fetch OpenAlex · size-by · color-by · ghosts.
 That is the whole control surface. No physics sliders.
 
+Papers sit near the papers they share references and citers with, not near what they cite: most papers in a field cite the same few hubs, which would pull everything into one ball. Color → **group** (the default) colors each group of related papers and labels it with words its titles share. Citation links stay faint until you hover or click a paper.
+
 Hover a node for title, authors, year, DOI, PDF badge, cited-here.
 Hover an edge for `A cites B` / `mutual citations`, provenance (`via`), confidence.
 
