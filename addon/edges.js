@@ -132,6 +132,65 @@ var CitegraphEdges = (function () {
     }
   }
 
+  // -- full-text analysis --------------------------------------------------
+
+  /** The four characters at s[i] as one number (normTitle output is ASCII). */
+  function prefixKey(s, i) {
+    return (
+      ((s.charCodeAt(i) * 128 + s.charCodeAt(i + 1)) * 128 + s.charCodeAt(i + 2)) * 128 +
+      s.charCodeAt(i + 3)
+    );
+  }
+
+  /**
+   * Titles to look for in reference sections, normalized once per build and
+   * indexed by their first four characters. Titles under 30 characters are
+   * left out: "Introduction" would match every paper.
+   * @param {string[]} titles  matchTitles returns indices into this list
+   */
+  function titleIndex(titles) {
+    const norm = titles.map((t) => normTitle(t));
+    const byPrefix = new Map();
+    norm.forEach((nt, i) => {
+      if (nt.length < 30) return;
+      const k = prefixKey(nt, 0);
+      const list = byPrefix.get(k);
+      if (list) list.push(i);
+      else byPrefix.set(k, [i]);
+    });
+    return { titles, norm, byPrefix };
+  }
+
+  /**
+   * Indices, ascending, of the indexed titles that appear in `text` starting
+   * at a word. One pass over the words, instead of one substring search of
+   * the whole text per title.
+   */
+  function matchTitles(text, index) {
+    const flat = normTitle(text);
+    const hits = new Set();
+    for (let i = 0; i < flat.length; ) {
+      let j = flat.indexOf(" ", i);
+      if (j < 0) j = flat.length;
+      const list = index.byPrefix.get(prefixKey(flat, i));
+      if (list) for (const k of list) if (flat.startsWith(index.norm[k], i)) hits.add(k);
+      i = j + 1;
+    }
+    return [...hits].sort((a, b) => a - b);
+  }
+
+  /**
+   * What buildGraph reads from one attachment's full text: how its reference
+   * section was found, the DOIs in it, and which indexed titles it names.
+   * Pure, so the scan worker runs it too.
+   * @returns {{quality: string, dois: string[], titles: number[]}}
+   */
+  function analyzeText(text, index) {
+    const seg = segment(text);
+    if (seg.quality === "none") return { quality: "none", dois: [], titles: [] };
+    return { quality: seg.quality, dois: findDois(seg.flat), titles: matchTitles(seg.flat, index) };
+  }
+
   // -- edge model ----------------------------------------------------------
 
   const STRATEGY_RANK = {
@@ -254,7 +313,9 @@ var CitegraphEdges = (function () {
 
   /**
    * Build the full graph from an adapter.
-   * Adapter: listItems, getAttachments, getAttachmentText, getPdfLinkUris
+   * Adapter: listItems, getAttachments, getPdfLinkUris, and either
+   * analyzeText(attKey, index) (analyzeText's result) or
+   * getAttachmentText(attKey) (the text, analyzed here)
    * Item: { key, itemID, title, doi, date, extra, year, creators, ... }
    */
   async function buildGraph(adapter, opts) {
@@ -274,13 +335,12 @@ var CitegraphEdges = (function () {
 
     const raw = [];
     const stats = { "pdf-links": 0, "text-doi": 0, "extra-doi": 0, "title-match": 0 };
-    const sections = new Map();
 
-    async function refSection(attKey) {
-      if (sections.has(attKey)) return sections.get(attKey);
-      const p = adapter.getAttachmentText(attKey).then((text) => (text ? segment(text) : null));
-      sections.set(attKey, p);
-      return p;
+    const index = titleIndex(items.map((i) => i.title));
+    async function textOf(attKey) {
+      if (adapter.analyzeText) return adapter.analyzeText(attKey, index);
+      const text = await adapter.getAttachmentText(attKey);
+      return text ? analyzeText(text, index) : null;
     }
 
     for (const item of items) {
@@ -327,16 +387,16 @@ var CitegraphEdges = (function () {
           }
         }
 
-        const seg = await refSection(att.key);
-        if (!seg || seg.quality === "none") continue;
+        const text = await textOf(att.key);
+        if (!text || text.quality === "none") continue;
 
-        for (const d of findDois(seg.flat)) {
+        for (const d of text.dois) {
           const target = byDoi.get(d);
           if (target && target !== item.key && yearOk(citingYear, yearOf(target))) {
             raw.push(
               edge(item.key, target, "text-doi", CONF["text-doi"], {
                 doi: d,
-                segment: seg.quality,
+                segment: text.quality,
               }),
             );
             stats["text-doi"]++;
@@ -344,23 +404,19 @@ var CitegraphEdges = (function () {
         }
 
         // title-match (simpler than Jajaho's rolling screen — fine at this scale)
-        const flat = normTitle(seg.flat);
         const confBy = { heading: 0.8, numbered: 0.75, tail: 0.4 };
-        const conf = confBy[seg.quality] || 0.4;
-        for (const t of items) {
+        const conf = confBy[text.quality] || 0.4;
+        for (const k of text.titles) {
+          const t = items[k];
           if (t.key === item.key) continue;
-          const nt = normTitle(t.title);
-          if (nt.length < 30) continue;
           if (!yearOk(citingYear, t.year || firstYear(t.date))) continue;
-          if (flat.includes(nt)) {
-            raw.push(
-              edge(item.key, t.key, "title-match", conf, {
-                segment: seg.quality,
-                matchedTitleChars: nt.length,
-              }),
-            );
-            stats["title-match"]++;
-          }
+          raw.push(
+            edge(item.key, t.key, "title-match", conf, {
+              segment: text.quality,
+              matchedTitleChars: index.norm[k].length,
+            }),
+          );
+          stats["title-match"]++;
         }
       }
     }
@@ -478,6 +534,9 @@ var CitegraphEdges = (function () {
     flattenPdfText,
     firstYear,
     segment,
+    titleIndex,
+    matchTitles,
+    analyzeText,
     edge,
     yearOk,
     merge,
