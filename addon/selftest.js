@@ -270,6 +270,11 @@ var CitegraphSelfTest = (function () {
         ok("content controls", ct.controls === true, ct.controlDetail);
         ok("content colors lib", ct.colorsLib === true, JSON.stringify(ct.hueSample));
         ok("content edge shaft paints", ct.edgePaintOk === true, JSON.stringify(ct.edgePaint));
+        ok(
+          "content groups",
+          ct.groups?.count >= 1 && ct.groups.assigned === ct.groups.held,
+          JSON.stringify(ct.groups),
+        );
         // dump canvases for visual check (probe = known 400×400 with one red edge)
         const dumps = [
           ["probe", ct.probeSnapshot],
@@ -315,6 +320,38 @@ var CitegraphSelfTest = (function () {
         ui.onAction([...ui.browsers.keys()][0], { kind: "collection", collection }, { type: "rebuild" });
         await sleep(300);
         ok("rebuild action", true);
+      }
+
+      // -- related layout ----------------------------------------------------
+      // The largest collection's graph, laid out by shared references: papers
+      // of one group must sit closer than papers of different groups. The
+      // canvas goes to /tmp/citegraph-groups.png for a look.
+      const wide = await largestCollection();
+      if (wide) {
+        await ui.openGraph({
+          kind: "collection",
+          collection: wide.collection,
+          title: wide.collection.name,
+        });
+        await sleep(800);
+        try {
+          const page = await ui.whenReady([...ui.browsers.values()].at(-1));
+          const rep = await page.wrappedJSObject.citegraphLayoutReport(4000);
+          const groups = JSON.parse(JSON.stringify(rep.groups));
+          ok(
+            "related: papers fall into groups",
+            groups.count >= 2 && groups.assigned === groups.held,
+            JSON.stringify(groups),
+          );
+          ok(
+            "related: groups sit apart",
+            rep.spreadRatio != null && rep.spreadRatio < 0.7,
+            `within/between distance ${rep.spreadRatio}, ${rep.placed} placed, ${wide.collection.name}`,
+          );
+          ok("related: snapshot", await savePng("groups", rep.snapshot), rep.status);
+        } catch (e) {
+          ok("related layout", false, String(e && e.message));
+        }
       }
 
       // -- performance (#16) -------------------------------------------------
@@ -441,6 +478,16 @@ var CitegraphSelfTest = (function () {
       const b = graph.nodes.find((n) => n.id === e.to);
       return a?.year && b?.year && b.year > a.year + 1;
     });
+  }
+
+  /** Writes a data: PNG URL to /tmp/citegraph-<name>.png; false if none. */
+  async function savePng(name, url) {
+    if (!url || !String(url).startsWith("data:image/png;base64,")) return false;
+    const bytes = atob(String(url).slice("data:image/png;base64,".length));
+    const arr = new Uint8Array(bytes.length);
+    for (let i = 0; i < bytes.length; i++) arr[i] = bytes.charCodeAt(i);
+    await IOUtils.write(`/tmp/citegraph-${name}.png`, arr);
+    return true;
   }
 
   /** The collection whose graph reads the most items, subcollections included. */

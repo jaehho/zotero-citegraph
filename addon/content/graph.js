@@ -7,7 +7,7 @@ const status = $("status");
 const foot = $("foot");
 
 let graph = { nodes: [], edges: [], stats: {} };
-let prefs = { sizeBy: "cited-here", colorBy: "year", showGhosts: false };
+let prefs = { sizeBy: "cited-here", colorBy: "group", showGhosts: false };
 let hover = null; // ephemeral {kind:'node'|'edge', id}
 let pin = null; // sticky node (click) — lights every edge touching it
 let fg = null;
@@ -85,6 +85,39 @@ function collectionKey(n) {
 let hueByAuthor = new Map([["?", "#666"]]);
 let hueByCollection = new Map([["?", "#666"]]);
 
+// -- relatedness -----------------------------------------------------------
+// Papers are laid out by what they share (CitegraphRelated), not by direct
+// citations: most papers cite the same few hubs, which balls them together.
+
+const GROUP_COLORS = 8; // --series-1..8
+const MIN_GROUP = 3; // smaller groups are "other": too few to name
+
+let related = null; // CitegraphRelated.relate() for `relatedFor`
+let relatedFor = null;
+
+function relation() {
+  if (relatedFor !== graph) {
+    related = CitegraphRelated.relate(graph.nodes, graph.edges);
+    relatedFor = graph;
+  }
+  return related;
+}
+
+/** The node's named group, or null for ghosts and groups under MIN_GROUP. */
+function groupOf(n) {
+  const rel = relation();
+  const g = rel.groupOf.get(n.id);
+  return g != null && rel.groups[g]?.size >= MIN_GROUP ? rel.groups[g] : null;
+}
+
+function groupName(g) {
+  return g.words.length ? g.words.join(" · ") : `group ${g.index + 1}`;
+}
+
+function groupColor(g, css) {
+  return g && g.index < GROUP_COLORS ? css.series[g.index] : css.other;
+}
+
 function labelOf(n) {
   const a = (n.creators && n.creators[0]) || (n.ghost ? "…" : "?");
   return n.year ? `${a} ${n.year}` : a;
@@ -130,8 +163,20 @@ function renderInner() {
     if (prefs.sizeBy === "year") return n.year ? 4 + (n.year - ystat.min) * 0.4 : 5;
     return 5 + Math.sqrt(n.citedHere || 0) * 3;
   };
+  const css = {
+    halo: getCss("--halo"),
+    muted: getCss("--muted"),
+    fg: getCss("--fg"),
+    accent: getCss("--accent"),
+    bg: getComputedStyle(document.body).backgroundColor,
+    series: Array.from({ length: GROUP_COLORS }, (_, i) => getCss(`--series-${i + 1}`)),
+    other: getCss("--series-other"),
+  };
+  const rel = relation();
+
   const colorOf = (n) => {
     if (n.ghost) return "#555";
+    if (prefs.colorBy === "group") return groupColor(groupOf(n), css);
     if (prefs.colorBy === "author") return hueByAuthor.get(authorKey(n)) || "#666";
     if (prefs.colorBy === "collection") return hueByCollection.get(collectionKey(n)) || "#666";
     return yearColor(n.year, ystat);
@@ -140,21 +185,25 @@ function renderInner() {
   const perf = nodes.length > 150;
   const el = $("graph");
   el.textContent = "";
-  const w = el.clientWidth || window.innerWidth || 800;
-  const h = el.clientHeight || window.innerHeight - 80 || 600;
+  // Size from the stage (a fixed grid row), not #graph, which grows to
+  // whatever canvas it holds.
+  const w = $("stage").clientWidth || window.innerWidth || 800;
+  const h = $("stage").clientHeight || window.innerHeight - 80 || 600;
 
-  const css = {
-    halo: getCss("--halo"),
-    muted: getCss("--muted"),
-    fg: getCss("--fg"),
-    accent: getCss("--accent"),
-    bg: getComputedStyle(document.body).backgroundColor,
-  };
+  const shown = new Set(nodes.map((n) => n.id));
+  const links = [
+    ...edges.map((e) => ({ ...e, kind: "cite", source: e.from, target: e.to })),
+    ...rel.links
+      .filter((l) => shown.has(l.a) && shown.has(l.b))
+      .map((l) => ({ kind: "near", source: l.a, target: l.b, weight: l.weight })),
+  ];
 
   fg = ForceGraph()(el)
     .width(w)
     .height(h)
-    .graphData({ nodes, links: edges.map((e) => ({ ...e, source: e.from, target: e.to })) })
+    .graphData({ nodes, links })
+    // "near" links only place papers; citations are drawn but do not pull
+    .linkVisibility((l) => l.kind === "cite")
     .backgroundColor(css.bg)
     .nodeId("id")
     .nodeLabel(() => "")
@@ -169,7 +218,7 @@ function renderInner() {
       // between the two mutual arcs
       strokeHit(ctx, link, color, sizeOf, 1 / (globalScale || 1));
     })
-    .nodeCanvasObject((node, ctx) => {
+    .nodeCanvasObject((node, ctx, globalScale) => {
       const r = sizeOf(node);
       const h = highlight();
       const hot = h?.kind === "node" && h.id === node.id;
@@ -196,7 +245,9 @@ function renderInner() {
         ctx.globalAlpha = 1;
         return;
       }
-      if (!perf || hot) {
+      // Paper labels when zoomed in, or for the lit paper; group labels name
+      // the regions at the default zoom.
+      if (hot || (globalScale >= 2.5 && !perf) || (globalScale >= 4 && perf)) {
         ctx.globalAlpha = dim ? 0.2 : 0.85;
         ctx.fillStyle = css.fg;
         ctx.font = "11px system-ui";
@@ -210,9 +261,10 @@ function renderInner() {
       const h = highlight();
       const dim = h && !hot;
       const color = hot ? css.accent : css.muted;
-      // dim 0.08 erased shafts while heads still read as marks
-      ctx.globalAlpha = dim ? 0.35 : hot ? 1 : 0.85;
-      drawLink(ctx, link, color, hot, sizeOf, 1 / (globalScale || 1));
+      // Faint at rest: 1,200 links at full ink hide which papers sit
+      // together. A hovered or pinned paper's links come up at full ink.
+      ctx.globalAlpha = hot ? 1 : dim ? 0.04 : 0.1;
+      drawLink(ctx, link, color, hot, sizeOf, 1 / (globalScale || 1), !h);
       ctx.globalAlpha = 1;
     })
     .linkDirectionalArrowLength(0)
@@ -254,13 +306,37 @@ function renderInner() {
       hideTip();
       kick();
     })
-    .cooldownTicks(perf ? 80 : 200)
+    .onRenderFramePost((ctx, globalScale) => drawGroupLabels(ctx, globalScale, nodes, css))
+    .cooldownTicks(perf ? 120 : 200)
     .warmupTicks(30);
 
-  fg.d3Force("charge").strength(nodes.length > 50 ? -120 : -320);
+  // Forces: "near" links pull similar papers together, harder the more
+  // alike; each named group pulls its papers toward its middle; citations
+  // pull only ghosts (which have no "near" links) toward their citers.
+  // A "near" link across two groups pulls a quarter as hard, so groups part.
+  const maxNear = Math.max(...rel.links.map((l) => l.weight), 1e-9);
+  fg.d3Force("charge").strength(nodes.length > 50 ? -90 : -320);
   const linkF = fg.d3Force("link");
-  if (linkF) linkF.distance(nodes.length > 50 ? 40 : 90);
-  window.setTimeout(() => fg.zoomToFit(400, 40), 300);
+  if (linkF) {
+    linkF
+      .distance((l) => (l.kind === "near" ? 30 : 20))
+      .strength((l) => {
+        if (l.kind !== "near") return l.source.ghost || l.target.ghost ? 0.4 : 0;
+        const across = groupOf(l.source) !== groupOf(l.target);
+        return (0.15 + 0.85 * (l.weight / maxNear)) * (across ? 0.25 : 1);
+      });
+  }
+  fg.d3Force("group", groupForce(0.15));
+  fg.d3Force("collide", collideForce(sizeOf, 2));
+  fg.d3Force("gravity", gravityForce(0.02));
+  // Frame the grouped papers once the layout settles; a paper that shares
+  // nothing drifts to the edge and would shrink everything else.
+  const framed = (n) => !!groupOf(n) || nodes.length < 20;
+  fg.onEngineStop(() => {
+    if (!fg.framed) fg.zoomToFit(400, 60, framed);
+    fg.framed = true;
+  });
+  window.setTimeout(() => fg.framed || fg.zoomToFit(400, 60, framed), 1200);
 
   const s = graph.stats || {};
   const parts = Object.entries(s)
@@ -272,12 +348,144 @@ function renderInner() {
     `  ·  ${edges.length} edges, ${nodes.length} nodes shown` +
     (graph.meta ? `  ·  from ${graph.meta.raw} raw claims` : "") +
     `  ·  v${meta.version} · ${loadSrc}`;
-  status.textContent = `${nodes.length} nodes · ${edges.length} edges`;
-  updateLegend(nodes, ystat);
+  const named = rel.groups.filter((g) => g.size >= MIN_GROUP).length;
+  status.textContent = `${nodes.length} nodes · ${edges.length} edges · ${named} groups`;
+  updateLegend(nodes, ystat, css);
+}
+
+/**
+ * Keeps library papers from overlapping (big, much-cited ones would
+ * otherwise sit on their neighbors). Ghosts are left out: thousands of them
+ * would make the pairwise check slow, and they are small.
+ */
+function collideForce(sizeOf, gap) {
+  let held = [];
+  const force = () => {
+    for (let i = 0; i < held.length; i++) {
+      const a = held[i];
+      for (let j = i + 1; j < held.length; j++) {
+        const b = held[j];
+        const min = sizeOf(a) + sizeOf(b) + gap;
+        let dx = b.x + b.vx - (a.x + a.vx);
+        let dy = b.y + b.vy - (a.y + a.vy);
+        let d = Math.hypot(dx, dy);
+        if (d >= min) continue;
+        if (!d) {
+          dx = (i - j) * 1e-3;
+          dy = 1e-3;
+          d = Math.hypot(dx, dy);
+        }
+        const push = ((min - d) / d) * 0.5;
+        a.vx -= dx * push * 0.5;
+        a.vy -= dy * push * 0.5;
+        b.vx += dx * push * 0.5;
+        b.vy += dy * push * 0.5;
+      }
+    }
+  };
+  force.initialize = (ns) => {
+    held = ns.filter((n) => !n.ghost);
+  };
+  return force;
+}
+
+/** A weak pull toward the middle, so papers that share nothing stay near. */
+function gravityForce(strength) {
+  let nodes = [];
+  const force = (alpha) => {
+    for (const n of nodes) {
+      n.vx -= n.x * strength * alpha;
+      n.vy -= n.y * strength * alpha;
+    }
+  };
+  force.initialize = (ns) => {
+    nodes = ns;
+  };
+  return force;
+}
+
+/** A force pulling each paper in a named group toward the group's middle. */
+function groupForce(strength) {
+  let nodes = [];
+  const force = (alpha) => {
+    const sum = new Map();
+    for (const n of nodes) {
+      const g = groupOf(n);
+      if (!g) continue;
+      const c = sum.get(g) || sum.set(g, { x: 0, y: 0, n: 0 }).get(g);
+      c.x += n.x;
+      c.y += n.y;
+      c.n++;
+    }
+    const k = strength * alpha;
+    for (const n of nodes) {
+      const g = groupOf(n);
+      const c = g && sum.get(g);
+      if (!c) continue;
+      n.vx += (c.x / c.n - n.x) * k;
+      n.vy += (c.y / c.n - n.y) * k;
+    }
+  };
+  force.initialize = (ns) => {
+    nodes = ns;
+  };
+  return force;
+}
+
+/**
+ * Each named group's words at the middle of its papers, in screen-size type
+ * with a background halo. Text stays in the ink color; a dot in the group's
+ * color ties it to the marks.
+ */
+function drawGroupLabels(ctx, globalScale, nodes, css) {
+  if (prefs.colorBy !== "group") return;
+  const k = 1 / (globalScale || 1);
+  const mid = new Map();
+  for (const n of nodes) {
+    const g = groupOf(n);
+    if (!g || n.x == null) continue;
+    const c = mid.get(g) || mid.set(g, { x: 0, y: 0, n: 0 }).get(g);
+    c.x += n.x;
+    c.y += n.y;
+    c.n++;
+  }
+  const dim = !!highlight();
+  ctx.save();
+  ctx.font = `600 ${13 * k}px system-ui, sans-serif`;
+  ctx.textAlign = "left";
+  ctx.textBaseline = "middle";
+  ctx.lineJoin = "round";
+  const lineH = 18 * k;
+  const placed = []; // label boxes so far, biggest group first
+  const hits = (b) => placed.some((p) => b.l < p.r && p.l < b.r && Math.abs(b.y - p.y) < lineH);
+  for (const [g, c] of [...mid].sort((a, b) => a[0].index - b[0].index)) {
+    const x = c.x / c.n;
+    const text = groupName(g);
+    const w = ctx.measureText(text).width;
+    const dot = 4 * k;
+    const left = x - (w + dot * 3) / 2;
+    // Nudge down, then up, until it clears the labels already drawn.
+    let y = c.y / c.n;
+    for (let i = 1; i < 12 && hits({ l: left, r: left + w + dot * 3, y }); i++) {
+      y = c.y / c.n + Math.ceil(i / 2) * lineH * (i % 2 ? 1 : -1);
+    }
+    placed.push({ l: left, r: left + w + dot * 3, y });
+    ctx.globalAlpha = dim ? 0.3 : 1;
+    ctx.beginPath();
+    ctx.arc(left + dot, y, dot, 0, 2 * Math.PI);
+    ctx.fillStyle = groupColor(g, css);
+    ctx.fill();
+    ctx.lineWidth = 4 * k;
+    ctx.strokeStyle = css.bg;
+    ctx.strokeText(text, left + dot * 3, y);
+    ctx.fillStyle = css.fg;
+    ctx.fillText(text, left + dot * 3, y);
+  }
+  ctx.restore();
 }
 
 /** Small muted key for the current color encoding. */
-function updateLegend(nodes, ystat) {
+function updateLegend(nodes, ystat, css) {
   const el = $("legend");
   if (!el) return;
   const held = nodes.filter((n) => !n.ghost);
@@ -285,7 +493,22 @@ function updateLegend(nodes, ystat) {
   el.hidden = true;
   if (!held.length) return;
 
-  if (prefs.colorBy === "author" || prefs.colorBy === "collection") {
+  if (prefs.colorBy === "group") {
+    el.appendChild(document.createTextNode("group (by shared references)"));
+    const sw = document.createElement("div");
+    sw.className = "swatches";
+    const counts = new Map();
+    let other = 0;
+    for (const n of held) {
+      const g = groupOf(n);
+      if (g && g.index < GROUP_COLORS) counts.set(g, (counts.get(g) || 0) + 1);
+      else other++;
+    }
+    const rows = [...counts].sort((a, b) => a[0].index - b[0].index);
+    for (const [g, count] of rows) sw.appendChild(legendRow(groupColor(g, css), groupName(g), count));
+    if (other) sw.appendChild(legendRow(css.other, "other", other));
+    el.appendChild(sw);
+  } else if (prefs.colorBy === "author" || prefs.colorBy === "collection") {
     const isAuthor = prefs.colorBy === "author";
     const keyOf = isAuthor ? authorKey : collectionKey;
     const hueMap = isAuthor ? hueByAuthor : hueByCollection;
@@ -332,6 +555,25 @@ function updateLegend(nodes, ystat) {
     el.appendChild(ends);
   }
   el.hidden = false;
+}
+
+function legendRow(color, name, count) {
+  const row = document.createElement("div");
+  row.className = "row";
+  const dot = document.createElement("span");
+  dot.className = "dot";
+  dot.style.background = color;
+  row.appendChild(dot);
+  const label = document.createElement("span");
+  label.className = "name";
+  label.textContent = name;
+  label.title = name;
+  row.appendChild(label);
+  const n = document.createElement("span");
+  n.className = "count";
+  n.textContent = String(count);
+  row.appendChild(n);
+  return row;
 }
 
 /** Keep the RAF loop painting. Never pause+resume per event. */
@@ -388,14 +630,15 @@ function showPinTip() {
  * curvature earns its keep. Head is a filled triangle kissing the shaft butt.
  * Sizes in screen px (`k` = 1/globalScale).
  */
-function drawLink(ctx, link, color, hot, sizeOf, k) {
+function drawLink(ctx, link, color, hot, sizeOf, k, resting) {
   const a = link.source;
   const b = link.target;
   const rA = sizeOf(a) + 1;
   const rB = sizeOf(b) + 1;
-  const headH = (hot ? 14 : 11) * k;
+  // at rest, hairlines: the links are context, the groups are the picture
+  const headH = (hot ? 14 : resting ? 6 : 11) * k;
   const headW = headH * 0.48;
-  const shaftW = (hot ? 3.5 : 2.5) * k;
+  const shaftW = (hot ? 3.5 : resting ? 1 : 2.5) * k;
 
   ctx.strokeStyle = color;
   ctx.fillStyle = color;
@@ -595,6 +838,13 @@ function showNodeTip(n) {
     d.textContent = "doi:" + n.doi;
     tip.appendChild(d);
   }
+  const g = !n.ghost && groupOf(n);
+  if (g) {
+    const gl = document.createElement("div");
+    gl.className = "meta";
+    gl.textContent = "group: " + groupName(g);
+    tip.appendChild(gl);
+  }
   const badges = document.createElement("div");
   badges.className = "meta";
   badges.textContent = [
@@ -772,9 +1022,11 @@ $("search").addEventListener("input", (e) => {
   kick();
 });
 
-window.addEventListener("resize", () => {
-  if (fg) fg.width($("graph").clientWidth).height($("graph").clientHeight);
-});
+// The stage changes size with the window, and when the footer gets its text
+// after the first render.
+new ResizeObserver(() => {
+  if (fg) fg.width($("stage").clientWidth).height($("stage").clientHeight);
+}).observe($("stage"));
 
 window.addEventListener("error", (e) => {
   status.textContent = "error: " + (e.message || e.type);
@@ -824,6 +1076,7 @@ window.citegraphSelfTest = function () {
       typeof CitegraphEdges.assignHues === "function" &&
       typeof CitegraphEdges.primaryCollection === "function";
     out.collectionColorKeys = [...new Set(graph.nodes.filter((n) => !n.ghost).map(collectionKey))];
+    out.groups = layoutReport().groups;
     out.hueSample = CitegraphEdges.assignHues(["A", "B"]);
 
     render();
@@ -853,6 +1106,57 @@ window.citegraphSelfTest = function () {
     out.error = String(err && err.message);
   }
   return out;
+};
+
+/**
+ * The groups, and how well the layout keeps them together: the mean distance
+ * between two papers of one group over that between papers of different
+ * groups (well under 1 when groups sit apart).
+ */
+function layoutReport() {
+  const rel = relation();
+  const named = rel.groups.filter((g) => g.size >= MIN_GROUP);
+  const held = graph.nodes.filter((n) => !n.ghost);
+  const placed = held.filter((n) => n.x != null && groupOf(n));
+  let same = 0;
+  let sameN = 0;
+  let diff = 0;
+  let diffN = 0;
+  for (let i = 0; i < placed.length; i++) {
+    for (let j = i + 1; j < placed.length; j++) {
+      const d = Math.hypot(placed[i].x - placed[j].x, placed[i].y - placed[j].y);
+      if (groupOf(placed[i]) === groupOf(placed[j])) {
+        same += d;
+        sameN++;
+      } else {
+        diff += d;
+        diffN++;
+      }
+    }
+  }
+  return {
+    groups: {
+      count: named.length,
+      sizes: named.map((g) => g.size),
+      names: named.map(groupName),
+      held: held.length,
+      assigned: held.filter((n) => rel.groupOf.has(n.id)).length,
+      modularity: Number(rel.modularity.toFixed(3)),
+    },
+    placed: placed.length,
+    spreadRatio: sameN && diffN ? Number((same / sameN / (diff / diffN)).toFixed(3)) : null,
+  };
+}
+
+/** After `waitMs` of layout: layoutReport plus a PNG of the canvas. */
+window.citegraphLayoutReport = async function (waitMs) {
+  await new Promise((r) => setTimeout(r, waitMs || 0));
+  const canvas = $("graph").querySelector("canvas");
+  let snapshot = null;
+  try {
+    snapshot = canvas ? canvas.toDataURL("image/png") : null;
+  } catch (e) {}
+  return { ...layoutReport(), status: status.textContent, snapshot };
 };
 
 /**
@@ -1015,14 +1319,19 @@ window.citegraphUserWalk = async function () {
       s.value = v;
       s.dispatchEvent(new Event("change", { bubbles: true }));
     }
-    for (const v of ["year", "author", "collection"]) {
+    for (const v of ["year", "author", "collection", "group"]) {
       const s = $("color-by");
       s.value = v;
       s.dispatchEvent(new Event("change", { bubbles: true }));
     }
-    $("color-by").value = "year";
-    $("color-by").dispatchEvent(new Event("change", { bubbles: true }));
-    step("size/color controls", true, "all 6 options");
+    const legendText = $("legend").textContent;
+    const firstGroup = relation().groups.find((g) => g.size >= MIN_GROUP);
+    step(
+      "group legend names the groups",
+      !firstGroup || legendText.includes(groupName(firstGroup)),
+      legendText.slice(0, 80),
+    );
+    step("size/color controls", true, "all 7 options");
 
     step(
       "status clean after walk",
