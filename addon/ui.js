@@ -13,7 +13,7 @@ class CitegraphUI {
     this.adapterCache = new Map(); // scopeKey -> {graph, builtAt}
     this.building = new Map(); // scopeKey -> in-flight build promise
     this.buildCount = 0; // full extraction passes, for the live suite
-    this.scanner = new PdfScanner("resource://" + this.resRoot + "/scan-worker.js");
+    this.scanner = new ScanWorker("resource://" + this.resRoot + "/scan-worker.js");
     this.pdfLinks = new PdfLinkCache();
     this.tabHooksInstalled = new WeakSet();
   }
@@ -678,22 +678,28 @@ class CitegraphUI {
         return out;
       },
 
-      async getAttachmentText(attKey) {
+      // The reference section, its DOIs and the titles it names, worked out
+      // in the scan worker: on the main thread this took ~1.5 s per rebuild
+      // of a 230-item collection.
+      async analyzeText(attKey, index) {
         const atts = [...attsByItem.values()].flat();
         const rec = atts.find((a) => a.key === attKey);
         if (!rec) return null;
         const path = ftCachePath(rec._att);
         if (!path) return null;
         const t = Date.now();
+        let bytes;
         try {
-          if (!(await IOUtils.exists(path))) return null;
-          return await Zotero.File.getContentsAsync(path, "utf-8");
+          bytes = await IOUtils.read(path);
         } catch (e) {
-          return null;
-        } finally {
-          timing.texts++;
-          timing.textReadMs += Date.now() - t;
+          return null; // not indexed yet
         }
+        const t1 = Date.now();
+        timing.texts++;
+        timing.textReadMs += t1 - t;
+        const result = await self.scanner.analyzeText(bytes, path, index);
+        timing.textAnalyzeMs += Date.now() - t1;
+        return result;
       },
 
       async getPdfLinkUris(attKey) {
@@ -732,16 +738,20 @@ class CitegraphUI {
 // -- shared helpers (Jajaho-slim) ------------------------------------------
 
 /**
- * Scans PDF bytes in a worker. If the worker cannot start, scans on the main
- * thread as before, so the graph still builds.
+ * Runs the per-file work (PDF link scans, full-text analysis) in a worker. If
+ * the worker cannot start, does it on the main thread as before, so the graph
+ * still builds.
  */
-class PdfScanner {
+class ScanWorker {
   constructor(url) {
     this.url = url;
     this.worker = null;
     this.failed = false;
     this.lastID = 0;
-    this.waiting = new Map(); // id -> {resolve, file}
+    this.waiting = new Map(); // id -> {resolve, file, kind, local, empty}
+    this.replies = { pdf: 0, text: 0 };
+    this.titleIDs = new WeakMap(); // titleIndex -> id the worker knows it by
+    this.lastTitlesID = 0;
   }
 
   get mode() {
@@ -764,27 +774,50 @@ class PdfScanner {
     return this.worker;
   }
 
-  /** URIs found in `bytes`; the bytes are handed to the worker, not copied. */
+  /** URIs found in PDF `bytes`; the bytes are handed to the worker, not copied. */
   scan(bytes, file) {
+    return this.run({ kind: "pdf" }, bytes, file, scanOnMainThread, []);
+  }
+
+  /** CitegraphEdges.analyzeText on the bytes of a UTF-8 full-text file. */
+  analyzeText(bytes, file, index) {
+    this.start();
+    const local = (b) => CitegraphEdges.analyzeText(new TextDecoder().decode(b), index);
+    return this.run({ kind: "text", titlesID: this.titlesID(index) }, bytes, file, local, null);
+  }
+
+  /** Sends a build's titles to the worker once; texts name them by id. */
+  titlesID(index) {
+    let id = this.titleIDs.get(index);
+    if (!id) {
+      id = ++this.lastTitlesID;
+      this.titleIDs.set(index, id);
+      this.worker?.postMessage({ kind: "titles", titlesID: id, titles: index.titles });
+    }
+    return id;
+  }
+
+  run(msg, bytes, file, local, empty) {
     const worker = this.start();
-    if (!worker) return Promise.resolve(scanOnMainThread(bytes));
+    if (!worker) return Promise.resolve(local(bytes));
     const id = ++this.lastID;
     return new Promise((resolve) => {
-      this.waiting.set(id, { resolve, file });
-      worker.postMessage({ id, bytes }, [bytes.buffer]);
+      this.waiting.set(id, { resolve, file, kind: msg.kind, local, empty });
+      worker.postMessage({ ...msg, id, bytes }, [bytes.buffer]);
     });
   }
 
-  onReply({ id, uris, error }) {
+  onReply({ id, result, error }) {
     const w = this.waiting.get(id);
     if (!w) return;
     this.waiting.delete(id);
-    if (error) log(`scan ${w.file}: ${error}`);
-    w.resolve(uris || []);
+    this.replies[w.kind]++;
+    if (error) log(`${w.kind} ${w.file}: ${error}`);
+    w.resolve(error ? w.empty : result);
   }
 
   onFailure(msg) {
-    log(`scan worker failed, scanning on the main thread: ${msg}`);
+    log(`scan worker failed, working on the main thread: ${msg}`);
     this.failed = true;
     this.worker?.terminate();
     this.worker = null;
@@ -793,15 +826,15 @@ class PdfScanner {
     this.waiting.clear();
     for (const w of waiting) {
       IOUtils.read(w.file)
-        .then((bytes) => w.resolve(scanOnMainThread(bytes)))
-        .catch(() => w.resolve([]));
+        .then((bytes) => w.resolve(w.local(bytes)))
+        .catch(() => w.resolve(w.empty));
     }
   }
 
   stop() {
     this.worker?.terminate();
     this.worker = null;
-    for (const w of this.waiting.values()) w.resolve([]);
+    for (const w of this.waiting.values()) w.resolve(w.empty);
     this.waiting.clear();
   }
 }
@@ -895,6 +928,7 @@ function newTiming() {
     pdfScanMaxMs: 0,
     texts: 0,
     textReadMs: 0,
+    textAnalyzeMs: 0,
   };
 }
 
@@ -903,7 +937,7 @@ function describeTiming(t) {
   return (
     `${t.pdfCached} PDFs unchanged; ${t.pdfs} PDFs (${mb} MB) read ${t.pdfReadMs} ms, ` +
     `scanned ${t.pdfScanMs} ms (max ${t.pdfScanMaxMs} ms); ` +
-    `${t.texts} texts read ${t.textReadMs} ms`
+    `${t.texts} texts read ${t.textReadMs} ms, analyzed ${t.textAnalyzeMs} ms`
   );
 }
 

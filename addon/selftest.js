@@ -329,6 +329,7 @@ var CitegraphSelfTest = (function () {
         ui.invalidate(key);
         await ui.pdfLinks.reset(); // cold: no PDF scanned yet, in memory or on disk
         const builds0 = ui.buildCount;
+        const texts0 = ui.scanner.replies.text;
         let stop = stallMonitor();
         let t0 = Date.now();
         await Promise.all([ui.buildGraph(scope), ui.buildGraph(scope)]);
@@ -338,6 +339,12 @@ var CitegraphSelfTest = (function () {
         const where = `${big.collection.name} (${big.count} items)`;
         ok("perf: concurrent builds share one pass", builds === 1, `${builds} passes, ${where}`);
         ok("perf: PDFs scanned in a worker", ui.scanner.mode === "worker" && !!ui.scanner.worker, ui.scanner.mode);
+        const inWorker = ui.scanner.replies.text - texts0;
+        ok(
+          "perf: texts analyzed in the worker",
+          inWorker > 0 && inWorker === ui.lastTiming?.texts,
+          `${inWorker} of ${ui.lastTiming?.texts} texts`,
+        );
         ok(
           "perf: cold build stall < 200 ms",
           cold.worst < 200,
