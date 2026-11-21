@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.1.9 — 2026-11-21
+
+- The graph lays papers out by what they share, not by what they cite: papers that cite the same works, or are cited by the same papers, sit together. Most papers in a field cite the same few hubs, which pulled every paper into one ball. Groups of related papers get a color and a label from words their titles share (Color → group, the new default), and citation links stay faint until you hover or click a paper.
+- Rebuilds after a sync or edit no longer keep Zotero's main thread busy for seconds: full texts are read and searched in the scan worker, titles are matched in one pass over each reference section, and the per-item annotation queries are gone.
+- Fix the graph canvas running 15 px into the footer.
+
 ## 0.1.8 — 2026-11-20
 
 - Fix the item pane's Citations summary counting references outside the
